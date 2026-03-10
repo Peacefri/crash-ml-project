@@ -1,5 +1,5 @@
 
-
+# Project synced with GitHub
 # Imports
 from road_data import get_road_type  # Function to get road info using OSMnx
 from weather_data import get_weather 
