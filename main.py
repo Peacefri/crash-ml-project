@@ -30,6 +30,10 @@ df["Crash Time"] = df["Crash timestamp (US/Central)"].dt.strftime("%H:%M")
 df["Crash Hour"] = df["Crash timestamp (US/Central)"].dt.hour
 df["Crash Day"] = df["Crash timestamp (US/Central)"].dt.day_name()
 
+#To see all crashes date and time
+#print(f"Total accidents processed: {len(df)}")
+#print("-" * 25)
+#print(df[["Crash Date", "Crash Time"]].to_string(index= False))
 print(df[["Crash Date", "Crash Time"]].head())
 
 
