@@ -1,9 +1,11 @@
 
-# Project synced with GitHub
+
 # Imports
 from road_data import get_road_type  # Function to get road info using OSMnx
+from road_data import process_road
 from weather_data import get_weather 
 from visuals_data import create_visualizations
+
 import pandas as pd
 
 
@@ -85,3 +87,5 @@ print("enrichment complete!")
 
 # Call visualization script
 create_visualizations(df)
+df[['Road Type', 'Lanes']]= df.apply(process_road, axis = 1)
+print(df[['Crash Date', 'Road Type', 'Lanes']].head())
