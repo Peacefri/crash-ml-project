@@ -1,91 +1,83 @@
 
 
 # Imports
-from road_data import get_road_type  # Function to get road info using OSMnx
-from road_data import process_road
-from weather_data import get_weather 
+from road_data import get_road_type
+from weather_data import get_weather
 from visuals_data import create_visualizations
 
 import pandas as pd
-
-
 import time
 
-
-#Load CSV & Clean Column Names
-
-df = pd.read_csv("Austin_crash_report_data.csv", skiprows=1)
-df.columns = df.columns.str.strip()
-
-print("Dataset Loaded Successfully")
-print(df.head())
-
-# Convert Timestamp & Create Features
-
-df["Crash timestamp (US/Central)"] = pd.to_datetime(
-    df["Crash timestamp (US/Central)"],
-    format="%Y %b %d %I:%M:%S %p"
-)
-
-df["Crash Date"] = df["Crash timestamp (US/Central)"].dt.date
-df["Crash Time"] = df["Crash timestamp (US/Central)"].dt.strftime("%H:%M")
-df["Crash Hour"] = df["Crash timestamp (US/Central)"].dt.hour
-df["Crash Day"] = df["Crash timestamp (US/Central)"].dt.day_name()
-
-#To see all crashes date and time
-#print(f"Total accidents processed: {len(df)}")
-#print("-" * 25)
-#print(df[["Crash Date", "Crash Time"]].to_string(index= False))
-print(df[["Crash Date", "Crash Time"]].head())
+INPUT_FILE = "Austin_crash_report_data.csv"
+OUTPUT_FILE = "crashes_final_enriched.csv"
 
 
-
-# Prepare Lists for Enrichment
-
-temps = []
-precips = []
-is_wet_list = []
-highways = []
-lanes_list = []
+def load_data():
+    df = pd.read_csv(INPUT_FILE, skiprows=1)
+    df.columns = df.columns.str.strip()
+    print("Dataset Loaded Successfully")
+    return df
 
 
-# Loop Through Dataset & Enrich
-
-for i, row in df.iterrows():
-    print(f"Processing row {i+1} of {len(df)}")
-    
-    # Road info
-    highway, lanes = get_road_type(row["latitude"], row["longitude"])
-    highways.append(highway)
-    lanes_list.append(lanes)
-    
-    # Weather info
-    temp, precip = get_weather(
-        row["latitude"],
-        row["longitude"],
-        str(row["Crash Date"]),
-        row["Crash Hour"]
+def create_time_features(df):
+    df["Crash timestamp (US/Central)"] = pd.to_datetime(
+        df["Crash timestamp (US/Central)"],
+        format="%Y %b %d %I:%M:%S %p"
     )
-    temps.append(temp)
-    precips.append(precip)
-    is_wet_list.append(precip > 0 if precip is not None else False)
-    
-    # Prevent API rate limits
-    time.sleep(0.5)
+
+    df["Crash Date"] = df["Crash timestamp (US/Central)"].dt.date
+    df["Crash Hour"] = df["Crash timestamp (US/Central)"].dt.hour
+    df["Crash Day"] = df["Crash timestamp (US/Central)"].dt.day_name()
+
+    return df
 
 
-# Add Enriched Data to DataFrame
-df["Temperature"] = temps
-df["Precipitation"] = precips
-df["is_wet"] = is_wet_list
-df["Highway_Type"] = highways
-df["Num_Lanes"] = lanes_list
+def enrich_data(df):
 
-# Save enriched CSV
-df.to_csv("crashes_final_enriched.csv", index=False)
-print("enrichment complete!")
+    temps = []
+    precips = []
+    highways = []
+    lanes_list = []
+    is_wet_list = []
 
-# Call visualization script
-create_visualizations(df)
-df[['Road Type', 'Lanes']]= df.apply(process_road, axis = 1)
-print(df[['Crash Date', 'Road Type', 'Lanes']].head())
+    for i, row in df.iterrows():
+
+        highway, lanes = get_road_type(row["latitude"], row["longitude"])
+        temp, precip = get_weather(
+            row["latitude"],
+            row["longitude"],
+            str(row["Crash Date"]),
+            row["Crash Hour"]
+        )
+
+        temps.append(temp)
+        precips.append(precip)
+        highways.append(highway)
+        lanes_list.append(lanes)
+        is_wet_list.append(precip > 0 if precip else False)
+
+        time.sleep(0.5)
+
+    df["Temperature"] = temps
+    df["Precipitation"] = precips
+    df["is_wet"] = is_wet_list
+    df["Highway_Type"] = highways
+    df["Num_Lanes"] = lanes_list
+
+    return df
+
+
+def main():
+
+    df = load_data()
+    df = create_time_features(df)
+    df = enrich_data(df)
+
+    df.to_csv(OUTPUT_FILE, index=False)
+    print("Enrichment Complete!")
+
+    create_visualizations(df)
+
+
+if __name__ == "__main__":
+    main()

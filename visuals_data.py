@@ -4,24 +4,38 @@ import pandas as pd
 import folium
 import branca.colormap as cm
 
+
 def create_visualizations(df):
 
     print("Creating visualizations...")
 
+    sns.set_style("whitegrid")
+
+    # -------------------------
     # Crashes by road type
+    # -------------------------
+
     plt.figure(figsize=(10,6))
 
-    road_counts = df['Highway_Type'].value_counts()
+    road_counts = df["Highway_Type"].value_counts().head(10).reset_index()
+    road_counts.columns = ["Road_Type","Crash_Count"]
+    road_labels = {
+        "primary": "Primary Road (Major city road)",
+        "secondary": "Secondary Road (Medium traffic)",
+        "tertiary": "Tertiary Road (Connector road)",
+        "residential": "Residential Street",
+        "motorway_link": "Highway Ramp",
+        "primary_link": "Primary Road Ramp",
+        "secondary_link": "Secondary Road Ramp",
+        "unclassified": "Minor Road",
+        "unknown": "Unknown Road Type"
+    }
+    df["Road_Label"] = df["Highway_Type"].map(road_labels)
 
-    road_plot_df = pd.DataFrame({
-        "Road_Type": road_counts.index,
-        "Crash_Count": road_counts.values
-    })
-
-    sns.barplot(x="Road_Type", y="Crash_Count", data=road_plot_df, palette="viridis")
+    sns.barplot(x="Road_Type", y="Crash_Count", data=road_counts, palette="viridis")
 
     plt.xticks(rotation=45)
-    plt.title("Number of Crashes by Road Type")
+    plt.title("Top 10 Roads with Most Crashes")
     plt.xlabel("Road Type")
     plt.ylabel("Number of Crashes")
 
@@ -30,20 +44,18 @@ def create_visualizations(df):
     plt.close()
 
 
+    # -------------------------
     # Wet vs Dry crashes
+    # -------------------------
+
+    df["Road_Condition"] = df["is_wet"].map({True:"Wet", False:"Dry"})
+
     plt.figure(figsize=(6,6))
 
-    wet_counts = df['is_wet'].value_counts()
-
-    wet_plot_df = pd.DataFrame({
-        "Wet": wet_counts.index,
-        "Count": wet_counts.values
-    })
-
-    sns.barplot(x="Wet", y="Count", data=wet_plot_df, palette="Blues")
+    sns.countplot(x="Road_Condition", data=df, palette="Blues")
 
     plt.title("Crashes: Wet vs Dry Conditions")
-    plt.xlabel("Wet Road")
+    plt.xlabel("Road Condition")
     plt.ylabel("Number of Crashes")
 
     plt.tight_layout()
@@ -51,10 +63,18 @@ def create_visualizations(df):
     plt.close()
 
 
+    # -------------------------
     # Crashes by hour
+    # -------------------------
+
     plt.figure(figsize=(10,6))
 
-    sns.countplot(x="Crash Hour", data=df, palette="magma")
+    sns.countplot(
+        x="Crash Hour",
+        data=df,
+        order=sorted(df["Crash Hour"].dropna().unique()),
+        palette="magma"
+    )
 
     plt.title("Crashes by Hour of Day")
     plt.xlabel("Hour")
@@ -65,9 +85,12 @@ def create_visualizations(df):
     plt.close()
 
 
-    # Map visualization
-    lat_mean = df['latitude'].mean()
-    lon_mean = df['longitude'].mean()
+    # -------------------------
+    # Crash Map
+    # -------------------------
+
+    lat_mean = df["latitude"].mean()
+    lon_mean = df["longitude"].mean()
 
     m = folium.Map(location=[lat_mean, lon_mean], zoom_start=11)
 
@@ -75,23 +98,30 @@ def create_visualizations(df):
     colormap.caption = "Crash Severity"
     colormap.add_to(m)
 
-    for i, row in df.iterrows():
+    sample_df = df.sample(min(2000, len(df)))
 
-        severity = row['crash_sev_id']
+    for _, row in sample_df.iterrows():
+
+        severity = row.get("crash_sev_id",0)
         if pd.isna(severity):
             severity = 0
 
         fill_color = colormap(severity)
-        outline_color = "black" if row['is_wet'] else "gray"
+        outline_color = "black" if row["is_wet"] else "gray"
 
         folium.CircleMarker(
-            location=[row['latitude'], row['longitude']],
+            location=[row["latitude"], row["longitude"]],
             radius=5,
             color=outline_color,
             fill=True,
             fill_color=fill_color,
             fill_opacity=0.8,
-            popup=f"Severity: {severity}, Road: {row['Highway_Type']}"
+            popup=f"""
+            Severity: {severity}<br>
+            Road Type: {row['Highway_Type']}<br>
+            Wet Road: {row['is_wet']}<br>
+            Hour: {row['Crash Hour']}
+            """
         ).add_to(m)
 
     m.save("crashes_map_severity_wetdry.html")
