@@ -4,7 +4,7 @@
 from road_data import get_road_type
 from weather_data import get_weather
 from visuals_data import create_visualizations
-
+from visuals_data import create_crash_heatmap
 import pandas as pd
 import time
 
@@ -77,6 +77,7 @@ def main():
     print("Enrichment Complete!")
 
     create_visualizations(df)
+    create_crash_heatmap(df)
 
 
 if __name__ == "__main__":
