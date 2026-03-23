@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+austin_road_network.pkl
+weather_cache.json
+crashes_working.csv
+crashes_full_filtered.csv
+crashes_final_enriched.csv

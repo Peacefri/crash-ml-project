@@ -1,7 +1,5 @@
-# ============================================================
 # main.py — Austin Crash Safety Prediction System
 # Phase 1: Data Collection & Enrichment
-# ============================================================
 
 import pandas as pd
 import time
@@ -12,26 +10,39 @@ from weather_data import get_weather, decode_weathercode
 from visuals_data import create_visualizations, create_crash_heatmap
 
 
-# ── File paths ───────────────────────────────────────────────
-INPUT_FILE      = "Austin_crash_report_data.csv"
+# File paths 
+INPUT_FILE      = "crashes_working.csv" 
 OUTPUT_FILE     = "crashes_final_enriched.csv"
 CHECKPOINT_FILE = "crashes_checkpoint.csv"
 
 
-# ── 1. Load Data ─────────────────────────────────────────────
+#  1. Load Data 
 def load_data():
-    """
-    Load the raw Austin crash CSV.
-    skiprows=1 skips the metadata row at the top of the file
-    so that the real column headers are read correctly.
-    """
-    df = pd.read_csv(INPUT_FILE, skiprows=1)
+    cols = [
+        'ID', 'Crash ID', 'crash_fatal_fl', 'case_id', 'rpt_block_num',
+        'rpt_street_name', 'rpt_street_sfx', 'crash_speed_limit',
+        'road_constr_zone_fl', 'latitude', 'longitude', 'crash_sev_id',
+        'sus_serious_injry_cnt', 'nonincap_injry_cnt', 'poss_injry_cnt',
+        'non_injry_cnt', 'unkn_injry_cnt', 'tot_injry_cnt', 'death_cnt',
+        'units_involved', 'point', 'motor_vehicle_death_count',
+        'motor_vehicle_serious_injury_count', 'bicycle_death_count',
+        'bicycle_serious_injury_count', 'pedestrian_death_count',
+        'pedestrian_serious_injury_count', 'motorcycle_death_count',
+        'motorcycle_serious_injury_count', 'other_death_count',
+        'other_serious_injury_count', 'onsys_fl', 'private_dr_fl',
+        'micromobility_serious_injury_count', 'micromobility_death_count',
+        'Crash timestamp (US/Central)', 'Crash timestamp',
+        'Is deleted', 'Is temporary record', 'Law enforcement fatality count',
+        'Reported street prefix', 'Estimated Maximum Comprehensive Cost',
+        'Estimated Total Comprehensive Cost', 'Location ID',
+        'Location group', 'Address', 'Collision type'
+    ]
+
+    df = pd.read_csv(INPUT_FILE, header=0, names=cols, low_memory=False, nrows=500)
     df.columns = df.columns.str.strip()
     print(f"Dataset loaded successfully — {len(df)} rows, {len(df.columns)} columns")
     return df
-
-
-# ── 2. Time Features ─────────────────────────────────────────
+#  2. Time Features 
 def create_time_features(df):
     """
     Parse the crash timestamp and extract useful time-based
@@ -58,20 +69,8 @@ def create_time_features(df):
     return df
 
 
-# ── 3. Severity Label ────────────────────────────────────────
+# 3. Severity Label 
 def create_severity_label(df):
-    """
-    Add a human-readable severity label and a binary
-    Is_Severe column that will be the ML model target variable.
-
-    Austin severity codes:
-        0 = Unknown
-        1 = Incapacitating Injury
-        2 = Non-Incapacitating Injury
-        3 = Possible Injury
-        4 = Killed
-        5 = Not Injured
-    """
     severity_labels = {
         0: "Unknown",
         1: "Incapacitating Injury",
@@ -82,11 +81,9 @@ def create_severity_label(df):
     }
 
     df["Severity_Label"] = df["crash_sev_id"].map(severity_labels).fillna("Unknown")
+    df["Is_Severe"] = df["crash_sev_id"].isin([1, 4]).astype(int)
 
-    # Binary target: severe = Unknown, Incapacitating, or Killed (0, 1, 4)
-    df["Is_Severe"] = df["crash_sev_id"].isin([0, 1, 4]).astype(int)
-
-    print("  Severity labels and Is_Severe target column created")
+    print("Severity labels and Is_Severe target column created")
     return df
 
 
@@ -223,12 +220,12 @@ def enrich_data(df):
         weathercodes.append(weathercode)
         is_wet_list.append(precip > 0 if precip is not None else None)
 
-        # ── Progress update every 10 rows ─────────────────────
-        if (i + 1) % 10 == 0 or (i + 1) == total:
+        # ── Progress update every 500 rows ─────────────────────
+        if (i + 1) % 500 == 0 or (i + 1) == total:
             print(f"  Progress: {i + 1}/{total} rows processed...")
 
-        # ── Save checkpoint every 10 rows ─────────────────────
-        if (i + 1) % 10 == 0:
+        # ── Save checkpoint every 500 rows ─────────────────────
+        if (i + 1) % 500 == 0:
             _save_checkpoint(
                 df, i,
                 highways, highway_labels, road_names,
@@ -237,8 +234,10 @@ def enrich_data(df):
                 temps, precips, windspeeds, visibilities,
                 weathercodes, is_wet_list
             )
-
-        time.sleep(0.5)
+      # Only sleep every 10 rows to avoid API rate limits
+      # Weather API allows ~10,000 requests/day — no need to slow down
+        if i % 10 == 0:
+            time.sleep(0.5)
 
     # ── Attach all enriched columns to dataframe ─────────────
 
