@@ -1,6 +1,13 @@
 # ============================================================
 # main.py — Austin Crash Safety Prediction System
 # Phase 1: Data Collection & Enrichment
+#
+# FIXES:
+# - AADT now passes road_name and highway_type for road matching
+# - AADT_Source column added and tracked through checkpoint
+# - Index alignment fix in enrich_data loop
+# - Is_Dark feature added from Crash_Hour
+# - Missing coordinate block now appends None for all lists
 # ============================================================
 
 import pandas as pd
@@ -22,9 +29,9 @@ CHECKPOINT_FILE = "crashes_checkpoint.csv"
 # ── 1. Load Data ─────────────────────────────────────────────
 def load_data():
     """
-    Load the crash CSV with manually defined column names
-    because MySQL exports do not include headers.
-    Change nrows=500 to nrows=None when ready for the full run.
+    Load crash CSV with manually defined column names.
+    MySQL exports do not include headers so we define them.
+    Remove nrows=500 when ready for the full overnight run.
     """
     cols = [
         'ID', 'Crash ID', 'crash_fatal_fl', 'case_id', 'rpt_block_num',
@@ -51,18 +58,23 @@ def load_data():
         header=0,
         names=cols,
         low_memory=False,
-        nrows=500          # Remove this line for the full overnight run
+        nrows=500          # Remove this line for the full overnight run when i get a betetr computer
     )
     df.columns = df.columns.str.strip()
-    print(f"Dataset loaded successfully — {len(df)} rows, {len(df.columns)} columns")
+
+    # FIX: Reset index so it runs 0,1,2... consistently
+    # This prevents index alignment issues in the loop
+    df = df.reset_index(drop=True)
+
+    print(f"Dataset loaded — {len(df)} rows, {len(df.columns)} columns")
     return df
 
 
 # ── 2. Time Features ─────────────────────────────────────────
 def create_time_features(df):
     """
-    Parse the crash timestamp and extract useful time-based
-    features for the prediction model.
+    Parse crash timestamp and extract time-based features
+    important for the prediction model.
     """
     df["Crash timestamp (US/Central)"] = pd.to_datetime(
         df["Crash timestamp (US/Central)"],
@@ -81,15 +93,20 @@ def create_time_features(df):
     df["Crash Year"]  = df["Crash timestamp (US/Central)"].dt.year
     df["Is_Weekend"]  = df["Crash Day"].isin(["Saturday", "Sunday"])
 
-    print("  Time features created: Date, Hour, Day, Month, Year, Is_Weekend")
+    # Is_Dark: nighttime flag — hours 8pm to 6am
+    # Meaningful independently of lighting data — affects driver behavior
+    df["Is_Dark"] = df["Crash Hour"].apply(
+        lambda h: 1 if pd.notna(h) and (h >= 20 or h <= 6) else 0
+    )
+
+    print("  Time features created: Date, Hour, Day, Month, Year, Is_Weekend, Is_Dark")
     return df
 
 
 # ── 3. Severity Label ────────────────────────────────────────
 def create_severity_label(df):
     """
-    Add human-readable severity label and binary Is_Severe
-    target column for the ML model.
+    Add human-readable severity label and binary Is_Severe target.
 
     Austin severity codes:
         0 = Unknown
@@ -110,7 +127,7 @@ def create_severity_label(df):
 
     df["Severity_Label"] = df["crash_sev_id"].map(severity_labels).fillna("Unknown")
 
-    # Binary target: severe = Incapacitating (1) or Killed (4)
+    # Binary target: severe = Unknown (0), Incapacitating (1), or Killed (4)
     df["Is_Severe"] = df["crash_sev_id"].isin([0, 1, 4]).astype(int)
 
     print("  Severity labels and Is_Severe target column created")
@@ -120,8 +137,10 @@ def create_severity_label(df):
 # ── 4. Enrich Data ───────────────────────────────────────────
 def enrich_data(df):
     """
-    Loop through every crash row and call road, weather,
-    and AADT APIs to attach enriched context to each record.
+    Loop through every crash row calling road, AADT, and weather
+    APIs to attach enriched features to each record.
+
+    Uses checkpoint recovery so interrupted runs resume safely.
     """
 
     # ── Checkpoint Recovery ───────────────────────────────────
@@ -133,7 +152,7 @@ def enrich_data(df):
     else:
         processed_count = 0
 
-    # ── Road output lists ─────────────────────────────────────
+    # ── Output lists (one entry per row) ─────────────────────
     highways             = []
     highway_labels       = []
     road_names           = []
@@ -144,12 +163,11 @@ def enrich_data(df):
     intersection_degrees = []
     curvatures           = []
 
-    # ── AADT output lists ─────────────────────────────────────
     aadt_values    = []
     aadt_roads     = []
     aadt_distances = []
+    aadt_sources   = []
 
-    # ── Weather output lists ──────────────────────────────────
     temps        = []
     precips      = []
     windspeeds   = []
@@ -160,10 +178,12 @@ def enrich_data(df):
     total = len(df)
 
     # ── Row Loop ─────────────────────────────────────────────
-    for i, row in df.iterrows():
+    # FIX: Use enumerate instead of df.iterrows() index to ensure
+    # list positions always match row positions correctly
+    for loop_idx, (df_idx, row) in enumerate(df.iterrows()):
 
         # Skip rows already processed in a previous run
-        if i < processed_count:
+        if loop_idx < processed_count:
             continue
 
         # ── Validate coordinates ──────────────────────────────
@@ -171,7 +191,8 @@ def enrich_data(df):
         lon = row.get("longitude")
 
         if pd.isna(lat) or pd.isna(lon):
-            print(f"  Row {i}: Missing coordinates — skipping API calls")
+            print(f"  Row {loop_idx}: Missing coordinates — skipping")
+            # Append None for ALL lists to keep them aligned
             highways.append(None)
             highway_labels.append(None)
             road_names.append(None)
@@ -184,6 +205,7 @@ def enrich_data(df):
             aadt_values.append(None)
             aadt_roads.append(None)
             aadt_distances.append(None)
+            aadt_sources.append("no_match")
             temps.append(None)
             precips.append(None)
             windspeeds.append(None)
@@ -198,7 +220,7 @@ def enrich_data(df):
              is_intersection, intersection_degree,
              curvature, road_name) = get_road_type(lat, lon)
         except Exception as e:
-            print(f"  Row {i}: Road data failed — {e}")
+            print(f"  Row {loop_idx}: Road data failed — {e}")
             (highway, highway_label, lanes, road_risk, speed,
              is_intersection, intersection_degree,
              curvature, road_name) = (None, None, None, None, None,
@@ -215,33 +237,37 @@ def enrich_data(df):
         curvatures.append(curvature)
 
         # ── AADT Data ─────────────────────────────────────────
+        # FIX: Pass road_name and highway_type so AADT matches
+        # the correct road — not just the nearest station
         try:
             crash_year = row.get("Crash Year")
             if pd.isna(crash_year):
                 crash_year = pd.to_datetime(
                     row["Crash timestamp (US/Central)"], errors="coerce"
                 ).year
-            aadt_val, aadt_road, aadt_dist, _ = get_aadt(
-                lat, lon, int(crash_year)
+            aadt_val, aadt_road, aadt_dist, aadt_source, _ = get_aadt(
+                lat,
+                lon,
+                int(crash_year),
+                road_name    = road_name,
+                highway_type = highway
             )
         except Exception as e:
-            print(f"  Row {i}: AADT lookup failed — {e}")
-            aadt_val, aadt_road, aadt_dist = None, None, None
+            print(f"  Row {loop_idx}: AADT lookup failed — {e}")
+            aadt_val, aadt_road, aadt_dist, aadt_source = None, None, None, "no_match"
 
         aadt_values.append(aadt_val)
         aadt_roads.append(aadt_road)
         aadt_distances.append(aadt_dist)
+        aadt_sources.append(aadt_source)
 
         # ── Weather Data ──────────────────────────────────────
         try:
             temp, precip, windspeed, visibility, weathercode = get_weather(
-                lat,
-                lon,
-                str(row["Crash Date"]),
-                row["Crash Hour"]
+                lat, lon, str(row["Crash Date"]), row["Crash Hour"]
             )
         except Exception as e:
-            print(f"  Row {i}: Weather data failed — {e}")
+            print(f"  Row {loop_idx}: Weather data failed — {e}")
             temp, precip, windspeed, visibility, weathercode = (
                 None, None, None, None, None
             )
@@ -254,26 +280,26 @@ def enrich_data(df):
         is_wet_list.append(precip > 0 if precip is not None else None)
 
         # ── Progress update every 500 rows ────────────────────
-        if (i + 1) % 500 == 0 or (i + 1) == total:
-            print(f"  Progress: {i + 1}/{total} rows processed...")
+        if (loop_idx + 1) % 500 == 0 or (loop_idx + 1) == total:
+            print(f"  Progress: {loop_idx + 1}/{total} rows processed...")
 
         # ── Save checkpoint every 500 rows ────────────────────
-        if (i + 1) % 500 == 0:
+        if (loop_idx + 1) % 500 == 0:
             _save_checkpoint(
-                df, i,
+                df, loop_idx,
                 highways, highway_labels, road_names,
                 lanes_list, speed_limits, road_risks,
                 is_intersections, intersection_degrees, curvatures,
-                aadt_values, aadt_roads, aadt_distances,
+                aadt_values, aadt_roads, aadt_distances, aadt_sources,
                 temps, precips, windspeeds, visibilities,
                 weathercodes, is_wet_list
             )
 
-        # Sleep every 10 rows to avoid API rate limits
-        if i % 10 == 0:
+        # Sleep every 10 rows to respect API rate limits
+        if loop_idx % 10 == 0:
             time.sleep(0.5)
 
-    # ── Attach all enriched columns to dataframe ─────────────
+    # ── Attach enriched columns to dataframe ─────────────────
 
     # Road columns
     df["Highway_Type"]         = highways
@@ -290,6 +316,7 @@ def enrich_data(df):
     df["AADT"]                 = aadt_values
     df["AADT_Station_Road"]    = aadt_roads
     df["AADT_Distance_km"]     = aadt_distances
+    df["AADT_Source"]          = aadt_sources
 
     # Weather columns
     df["Temperature"]          = temps
@@ -304,19 +331,19 @@ def enrich_data(df):
 
 
 # ── Checkpoint Helper ────────────────────────────────────────
-def _save_checkpoint(df, i,
+def _save_checkpoint(df, loop_idx,
                      highways, highway_labels, road_names,
                      lanes_list, speed_limits, road_risks,
                      is_intersections, intersection_degrees, curvatures,
-                     aadt_values, aadt_roads, aadt_distances,
+                     aadt_values, aadt_roads, aadt_distances, aadt_sources,
                      temps, precips, windspeeds, visibilities,
                      weathercodes, is_wet_list):
     """
     Save a partial copy of the enriched dataframe to disk.
-    Allows the run to resume from this point if interrupted.
+    Allows the run to resume if interrupted.
     """
-    partial = df.iloc[:i + 1].copy()
-    n = len(partial)
+    n       = loop_idx + 1
+    partial = df.iloc[:n].copy()
 
     def pad(lst):
         return (lst + [None] * n)[:n]
@@ -333,6 +360,7 @@ def _save_checkpoint(df, i,
     partial["AADT"]                = pad(aadt_values)
     partial["AADT_Station_Road"]   = pad(aadt_roads)
     partial["AADT_Distance_km"]    = pad(aadt_distances)
+    partial["AADT_Source"]         = pad(aadt_sources)
     partial["Temperature"]         = pad(temps)
     partial["Precipitation"]       = pad(precips)
     partial["Windspeed"]           = pad(windspeeds)
@@ -341,7 +369,7 @@ def _save_checkpoint(df, i,
     partial["is_wet"]              = pad(is_wet_list)
 
     partial.to_csv(CHECKPOINT_FILE, index=False)
-    print(f"  Checkpoint saved at row {i + 1}")
+    print(f"  Checkpoint saved at row {n}")
 
 
 # ── 5. Main ──────────────────────────────────────────────────
@@ -360,8 +388,8 @@ def main():
     print("\n[Step 3] Creating severity labels...")
     df = create_severity_label(df)
 
-    print("\n[Step 4] Enriching data (road + AADT + weather APIs)...")
-    print("  This may take a few minutes — progress updates every 500 rows\n")
+    print("\n[Step 4] Enriching data (road + AADT + weather)...")
+    print("  Progress updates every 500 rows\n")
     df = enrich_data(df)
 
     print(f"\n[Step 5] Saving enriched dataset to '{OUTPUT_FILE}'...")
@@ -382,14 +410,14 @@ def main():
     print(f"  Total rows   : {len(df)}")
     print(f"  Total columns: {len(df.columns)}")
     print()
-    print("  Road columns    : Highway_Type, Road_Type_Label, Road_Name,")
-    print("                    Num_Lanes, Speed_Limit, Road_Risk_Level,")
-    print("                    Is_Intersection, Intersection_Degree, Road_Curvature")
-    print("  AADT columns    : AADT, AADT_Station_Road, AADT_Distance_km")
-    print("  Weather columns : Temperature, Precipitation, Windspeed,")
-    print("                    Visibility, Weather_Code, Weather_Condition, is_wet")
-    print("  Time columns    : Crash Date, Hour, Day, Month, Year, Is_Weekend")
-    print("  Severity columns: Severity_Label, Is_Severe")
+    print("  Road    : Highway_Type, Road_Type_Label, Road_Name,")
+    print("            Num_Lanes, Speed_Limit, Road_Risk_Level,")
+    print("            Is_Intersection, Intersection_Degree, Road_Curvature")
+    print("  AADT    : AADT, AADT_Station_Road, AADT_Distance_km, AADT_Source")
+    print("  Weather : Temperature, Precipitation, Windspeed,")
+    print("            Visibility, Weather_Code, Weather_Condition, is_wet")
+    print("  Time    : Crash Date, Hour, Day, Month, Year, Is_Weekend, Is_Dark")
+    print("  Severity: Severity_Label, Is_Severe")
     print()
     print("  Charts saved : see .png files in this folder")
     print("  Maps saved   : see .html files in this folder")

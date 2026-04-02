@@ -1,6 +1,13 @@
 # ============================================================
 # visuals_data.py — Austin Crash Safety Prediction System
 # Phase 1: Exploratory Visualizations
+#
+# FIXES:
+# - Road_Label now handles None Highway_Type safely
+# - crash_sev_id int cast wrapped in safe conversion
+# - severity_by_road_type pivot guarded against empty data
+# - colormap min/max guarded against equal values
+# - Map popup handles None values safely
 # ============================================================
 
 from folium.plugins import HeatMap
@@ -11,7 +18,7 @@ import folium
 import branca.colormap as cm
 
 
-# ── Road type short labels for chart axis ────────────────────
+# ── Road type short labels ────────────────────────────────────
 ROAD_LABELS = {
     "motorway":       "Interstate / Freeway",
     "motorway_link":  "Freeway Ramp",
@@ -26,11 +33,14 @@ ROAD_LABELS = {
     "residential":    "Residential Street",
     "living_street":  "Shared Living Street",
     "service":        "Service / Parking Road",
+    "track":          "Unpaved Track",
+    "path":           "Path / Trail",
+    "pedestrian":     "Pedestrian Zone",
     "unclassified":   "Minor Road",
     "unknown":        "Unknown Road Type"
 }
 
-# ── Austin severity codes ────────────────────────────────────
+# ── Austin severity codes ─────────────────────────────────────
 SEVERITY_LABELS = {
     0: "Unknown",
     1: "Incapacitating Injury",
@@ -41,71 +51,70 @@ SEVERITY_LABELS = {
 }
 
 
+def safe_int(val):
+    """Safely convert a value to int, returning 0 if it fails."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
 def create_visualizations(df):
 
     print("Creating visualizations...")
     sns.set_style("whitegrid")
 
-    # =========================================================
-    # 1. Crashes by Road Type (with definition legend box)
-    # =========================================================
-    df["Road_Label"] = df["Highway_Type"].map(ROAD_LABELS).fillna("Other")
+    # ── Working copy with safe Road_Label ────────────────────
+    # FIX: fillna("unknown") before mapping so None values
+    # get mapped to "Unknown Road Type" instead of NaN
+    df = df.copy()
+    df["Road_Label"] = (
+        df["Highway_Type"]
+        .fillna("unknown")
+        .map(ROAD_LABELS)
+        .fillna("Other")
+    )
 
+    # =========================================================
+    # 1. Crashes by Road Type
+    # =========================================================
     road_counts = df["Road_Label"].value_counts().head(10).reset_index()
     road_counts.columns = ["Road_Type", "Crash_Count"]
 
     fig, ax = plt.subplots(figsize=(16, 8))
     sns.barplot(x="Road_Type", y="Crash_Count", data=road_counts,
                 palette="viridis", ax=ax)
-
     ax.set_xticklabels(ax.get_xticklabels(), rotation=35, ha="right")
     ax.set_title("Top 10 Road Types by Crash Count", fontsize=14,
                  fontweight="bold", pad=15)
     ax.set_xlabel("Road Type", fontsize=11)
     ax.set_ylabel("Number of Crashes", fontsize=11)
 
-    # Add count labels on top of each bar
     for p in ax.patches:
-        ax.annotate(
-            f"{int(p.get_height())}",
-            (p.get_x() + p.get_width() / 2.0, p.get_height()),
-            ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
+        ax.annotate(f"{int(p.get_height())}",
+                    (p.get_x() + p.get_width() / 2.0, p.get_height()),
+                    ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-    # Definition legend box on the right side
     legend_text = (
         "Road Type Definitions\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Interstate / Freeway    — High-speed limited-access\n"
         "                          highway (e.g. I-35)\n\n"
         "Freeway Ramp            — Entry/exit ramps to freeways\n\n"
-        "State Highway           — Major non-interstate state routes\n\n"
+        "State Highway           — Major non-interstate routes\n\n"
         "Primary Road            — High-traffic city arterials\n"
         "                          (e.g. Lamar Blvd, Congress Ave)\n\n"
-        "Secondary Road          — Medium-traffic roads linking\n"
-        "                          districts and neighborhoods\n\n"
-        "Tertiary Road           — Low-speed neighborhood\n"
-        "                          connector roads\n\n"
-        "Residential Street      — Local streets within\n"
-        "                          neighborhoods\n\n"
+        "Secondary Road          — Medium-traffic connector roads\n\n"
+        "Tertiary Road           — Low-speed neighborhood roads\n\n"
+        "Residential Street      — Local neighborhood streets\n\n"
         "Minor Road              — Unclassified low-traffic roads\n\n"
-        "Service / Parking Road  — Access roads, parking lots,\n"
-        "                          driveways\n\n"
-        "Secondary Ramp          — On/off ramps for secondary roads"
+        "Service / Parking Road  — Access roads and driveways"
     )
-
     props = dict(boxstyle="round", facecolor="lightyellow",
                  edgecolor="gray", alpha=0.9)
-    ax.text(
-        1.02, 1.0,
-        legend_text,
-        transform=ax.transAxes,
-        fontsize=8.5,
-        verticalalignment="top",
-        bbox=props,
-        fontfamily="monospace",
-        linespacing=1.4
-    )
+    ax.text(1.02, 1.0, legend_text, transform=ax.transAxes,
+            fontsize=8.5, verticalalignment="top", bbox=props,
+            fontfamily="monospace", linespacing=1.4)
 
     plt.tight_layout()
     plt.savefig("crashes_by_road_type.png", bbox_inches="tight", dpi=150)
@@ -116,29 +125,20 @@ def create_visualizations(df):
     # 2. Wet vs Dry Crashes
     # =========================================================
     def map_wet(val):
-        if val is True:
-            return "Wet"
-        elif val is False:
-            return "Dry"
-        else:
-            return "Unknown"
+        if val is True:   return "Wet"
+        elif val is False: return "Dry"
+        else:              return "Unknown"
 
     df["Road_Condition"] = df["is_wet"].apply(map_wet)
 
     plt.figure(figsize=(7, 6))
     ax2 = sns.countplot(x="Road_Condition", data=df, palette="Blues",
                         order=["Wet", "Dry", "Unknown"])
-
-    # Add count labels on bars
     for p in ax2.patches:
-        ax2.annotate(
-            f"{int(p.get_height())}",
-            (p.get_x() + p.get_width() / 2.0, p.get_height()),
-            ha="center", va="bottom", fontsize=11, fontweight="bold"
-        )
-
-    plt.title("Crashes by Road Surface Condition", fontsize=13,
-              fontweight="bold")
+        ax2.annotate(f"{int(p.get_height())}",
+                     (p.get_x() + p.get_width() / 2.0, p.get_height()),
+                     ha="center", va="bottom", fontsize=11, fontweight="bold")
+    plt.title("Crashes by Road Surface Condition", fontsize=13, fontweight="bold")
     plt.xlabel("Road Condition at Time of Crash", fontsize=11)
     plt.ylabel("Number of Crashes", fontsize=11)
     plt.tight_layout()
@@ -150,17 +150,11 @@ def create_visualizations(df):
     # 3. Crashes by Hour of Day
     # =========================================================
     plt.figure(figsize=(13, 6))
-    ax3 = sns.countplot(
-        x="Crash Hour",
-        data=df,
-        order=sorted(df["Crash Hour"].dropna().unique()),
-        palette="magma"
-    )
-
-    # Highlight peak hours with annotation
+    sns.countplot(x="Crash Hour", data=df,
+                  order=sorted(df["Crash Hour"].dropna().unique()),
+                  palette="magma")
     plt.title("Crashes by Hour of Day", fontsize=13, fontweight="bold")
-    plt.xlabel("Hour of Day  (0 = Midnight,  12 = Noon,  23 = 11 PM)",
-               fontsize=10)
+    plt.xlabel("Hour of Day  (0 = Midnight,  12 = Noon,  23 = 11 PM)", fontsize=10)
     plt.ylabel("Number of Crashes", fontsize=11)
     plt.tight_layout()
     plt.savefig("crashes_by_hour.png", dpi=150)
@@ -172,18 +166,13 @@ def create_visualizations(df):
     # =========================================================
     day_order = ["Monday", "Tuesday", "Wednesday", "Thursday",
                  "Friday", "Saturday", "Sunday"]
-
     plt.figure(figsize=(10, 6))
     ax4 = sns.countplot(x="Crash Day", data=df, order=day_order,
                         palette="coolwarm")
-
     for p in ax4.patches:
-        ax4.annotate(
-            f"{int(p.get_height())}",
-            (p.get_x() + p.get_width() / 2.0, p.get_height()),
-            ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
-
+        ax4.annotate(f"{int(p.get_height())}",
+                     (p.get_x() + p.get_width() / 2.0, p.get_height()),
+                     ha="center", va="bottom", fontsize=10, fontweight="bold")
     plt.title("Crashes by Day of Week", fontsize=13, fontweight="bold")
     plt.xlabel("Day of Week", fontsize=11)
     plt.ylabel("Number of Crashes", fontsize=11)
@@ -196,29 +185,25 @@ def create_visualizations(df):
     # 5. Crash Severity Distribution
     # =========================================================
     if "crash_sev_id" in df.columns:
-        df["Severity_Label"] = df["crash_sev_id"].map(
-            SEVERITY_LABELS).fillna("Unknown")
-
+        # FIX: Use safe_int to avoid crash on None severity values
+        df["Severity_Label"] = df["crash_sev_id"].apply(
+            lambda x: SEVERITY_LABELS.get(safe_int(x), "Unknown")
+            if pd.notna(x) else "Unknown"
+        )
         sev_order = list(SEVERITY_LABELS.values())
 
         plt.figure(figsize=(10, 6))
         ax5 = sns.countplot(x="Severity_Label", data=df,
                             order=sev_order, palette="RdYlGn_r")
-
         for p in ax5.patches:
-            ax5.annotate(
-                f"{int(p.get_height())}",
-                (p.get_x() + p.get_width() / 2.0, p.get_height()),
-                ha="center", va="bottom", fontsize=10, fontweight="bold"
-            )
-
-        plt.title("Crash Severity Distribution", fontsize=13,
-                  fontweight="bold")
+            ax5.annotate(f"{int(p.get_height())}",
+                         (p.get_x() + p.get_width() / 2.0, p.get_height()),
+                         ha="center", va="bottom", fontsize=10, fontweight="bold")
+        plt.title("Crash Severity Distribution", fontsize=13, fontweight="bold")
         plt.xlabel("Severity Level", fontsize=11)
         plt.ylabel("Number of Crashes", fontsize=11)
         plt.xticks(rotation=20, ha="right")
 
-        # Add severity code reference box
         sev_legend = (
             "Severity Code Reference\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -231,68 +216,69 @@ def create_visualizations(df):
         )
         props = dict(boxstyle="round", facecolor="lightyellow",
                      edgecolor="gray", alpha=0.9)
-        ax5.text(
-            1.02, 1.0,
-            sev_legend,
-            transform=ax5.transAxes,
-            fontsize=9,
-            verticalalignment="top",
-            bbox=props,
-            fontfamily="monospace",
-            linespacing=1.5
-        )
-
+        ax5.text(1.02, 1.0, sev_legend, transform=ax5.transAxes,
+                 fontsize=9, verticalalignment="top", bbox=props,
+                 fontfamily="monospace", linespacing=1.5)
         plt.tight_layout()
         plt.savefig("crashes_by_severity.png", bbox_inches="tight", dpi=150)
         plt.close()
         print("  Saved: crashes_by_severity.png")
 
     # =========================================================
-    # 6. Crash Severity by Road Type (Heatmap Table)
+    # 6. Crash Severity by Road Type (Heatmap)
+    # FIX: Guard against empty pivot table
     # =========================================================
     if "crash_sev_id" in df.columns:
-        df["Severity_Label"] = df["crash_sev_id"].map(
-            SEVERITY_LABELS).fillna("Unknown")
+        pivot_data = df[df["Road_Label"] != "Other"].copy()
+        if len(pivot_data) > 0:
+            pivot_data["Severity_Label"] = pivot_data["crash_sev_id"].apply(
+                lambda x: SEVERITY_LABELS.get(safe_int(x), "Unknown")
+                if pd.notna(x) else "Unknown"
+            )
+            pivot = pivot_data.groupby(
+                ["Road_Label", "Severity_Label"]
+            ).size().unstack(fill_value=0)
 
-        pivot = df.groupby(
-            ["Road_Label", "Severity_Label"]
-        ).size().unstack(fill_value=0)
-
-        plt.figure(figsize=(13, 7))
-        sns.heatmap(
-            pivot,
-            annot=True,
-            fmt="d",
-            cmap="YlOrRd",
-            linewidths=0.5,
-            linecolor="gray"
-        )
-        plt.title("Crash Severity by Road Type", fontsize=13,
-                  fontweight="bold")
-        plt.xlabel("Severity Level", fontsize=11)
-        plt.ylabel("Road Type", fontsize=11)
-        plt.xticks(rotation=20, ha="right")
-        plt.yticks(rotation=0)
-        plt.tight_layout()
-        plt.savefig("severity_by_road_type.png", bbox_inches="tight", dpi=150)
-        plt.close()
-        print("  Saved: severity_by_road_type.png")
+            if len(pivot) > 0:
+                plt.figure(figsize=(13, 7))
+                sns.heatmap(pivot, annot=True, fmt="d", cmap="YlOrRd",
+                            linewidths=0.5, linecolor="gray")
+                plt.title("Crash Severity by Road Type", fontsize=13, fontweight="bold")
+                plt.xlabel("Severity Level", fontsize=11)
+                plt.ylabel("Road Type", fontsize=11)
+                plt.xticks(rotation=20, ha="right")
+                plt.yticks(rotation=0)
+                plt.tight_layout()
+                plt.savefig("severity_by_road_type.png",
+                            bbox_inches="tight", dpi=150)
+                plt.close()
+                print("  Saved: severity_by_road_type.png")
 
     # =========================================================
     # 7. Crash Map — Severity + Wet/Dry
+    # FIX: Safe int cast for severity, safe popup text,
+    #      colormap guarded against equal min/max
     # =========================================================
     lat_mean = df["latitude"].mean()
     lon_mean = df["longitude"].mean()
     m = folium.Map(location=[lat_mean, lon_mean], zoom_start=11)
 
-    # Scale colormap dynamically from actual severity range
-    sev_min = int(df["crash_sev_id"].min()) if "crash_sev_id" in df.columns else 0
-    sev_max = int(df["crash_sev_id"].max()) if "crash_sev_id" in df.columns else 5
+    if "crash_sev_id" in df.columns:
+        valid_sev = df["crash_sev_id"].dropna()
+        sev_min   = int(valid_sev.min()) if len(valid_sev) > 0 else 0
+        sev_max   = int(valid_sev.max()) if len(valid_sev) > 0 else 5
+        # FIX: prevent colormap error when min == max
+        if sev_min == sev_max:
+            sev_min = max(0, sev_min - 1)
+            sev_max = sev_max + 1
+    else:
+        sev_min, sev_max = 0, 5
+
     colormap = cm.linear.YlOrRd_09.scale(sev_min, sev_max)
     colormap.caption = "Crash Severity (0=Unknown → 4=Killed)"
     colormap.add_to(m)
 
-    # Add map legend as HTML overlay
+    # Map legend HTML overlay
     legend_html = """
     <div style="position: fixed; bottom: 40px; left: 40px; z-index: 1000;
                 background-color: white; padding: 12px 16px;
@@ -314,9 +300,9 @@ def create_visualizations(df):
     sample_df = df.sample(min(2000, len(df)))
 
     for _, row in sample_df.iterrows():
-        severity = row.get("crash_sev_id", 0)
-        if pd.isna(severity):
-            severity = 0
+        # FIX: safe int cast for severity
+        severity = safe_int(row.get("crash_sev_id", 0)) \
+            if pd.notna(row.get("crash_sev_id")) else 0
 
         wet_val = row.get("is_wet", None)
         if wet_val is True:
@@ -329,15 +315,21 @@ def create_visualizations(df):
             outline_color  = "blue"
             condition_text = "Unknown"
 
-        sev_label = SEVERITY_LABELS.get(int(severity), "Unknown")
+        sev_label   = SEVERITY_LABELS.get(severity, "Unknown")
+        road_label  = str(row.get("Road_Type_Label",
+                          row.get("Highway_Type", "N/A")) or "N/A")
+        road_name   = str(row.get("Road_Name", "N/A") or "N/A")
+        aadt_val    = row.get("AADT", "N/A")
+        aadt_source = row.get("AADT_Source", "N/A")
 
+        # FIX: safe popup string — no raw HTML, all values cast to str
         popup_text = (
-            f"Severity: {int(severity)} — {sev_label} | "
-            f"Road: {str(row.get('Road_Type_Label', row.get('Highway_Type', 'N/A')))} | "
-            f"Road Name: {str(row.get('Road_Name', 'N/A'))} | "
+            f"Severity: {severity} — {sev_label} | "
+            f"Road: {road_label} | "
+            f"Name: {road_name} | "
             f"Condition: {condition_text} | "
             f"Hour: {row.get('Crash Hour', 'N/A')} | "
-            f"Speed Limit: {row.get('Speed_Limit', 'N/A')}"
+            f"AADT: {aadt_val} ({aadt_source})"
         )
 
         folium.CircleMarker(
@@ -360,13 +352,12 @@ def create_crash_heatmap(df):
 
     lat_mean = df["latitude"].mean()
     lon_mean = df["longitude"].mean()
-
     m = folium.Map(location=[lat_mean, lon_mean], zoom_start=11)
 
-    # Add title overlay
     title_html = """
-    <div style="position: fixed; top: 15px; left: 50%; transform: translateX(-50%);
-                z-index: 1000; background-color: white; padding: 8px 16px;
+    <div style="position: fixed; top: 15px; left: 50%;
+                transform: translateX(-50%); z-index: 1000;
+                background-color: white; padding: 8px 16px;
                 border: 2px solid gray; border-radius: 8px;
                 font-size: 15px; font-weight: bold;">
         Austin Crash Density Heatmap
@@ -374,15 +365,13 @@ def create_crash_heatmap(df):
     """
     m.get_root().html.add_child(folium.Element(title_html))
 
-    # Weight heatmap by severity if available
     if "crash_sev_id" in df.columns:
-        weighted = df[["latitude", "longitude", "crash_sev_id"]].dropna()
+        weighted  = df[["latitude", "longitude", "crash_sev_id"]].dropna()
         heat_data = weighted.values.tolist()
         print("  Heatmap weighted by crash severity")
     else:
         heat_data = df[["latitude", "longitude"]].dropna().values.tolist()
 
     HeatMap(heat_data, radius=10, blur=15, max_zoom=13).add_to(m)
-
     m.save("crash_density_heatmap.html")
     print("  Saved: crash_density_heatmap.html")
