@@ -19,7 +19,20 @@ import numpy as np
 import folium
 import branca.colormap as cm
 
-INPUT_FILE = "crashes_final_enriched.csv"
+INPUT_FILE     = "crashes_final_enriched.csv"
+SCHOOLS_FILE   = "austin_schools.csv"
+BUS_STOPS_FILE = "capmetro_stops.csv"
+
+# ── Zone category colors ──────────────────────────────────────
+ZONE_COLORS = {
+    "Residential":    "#228B22",   # Green
+    "Commercial":     "#FF6600",   # Orange
+    "Industrial":     "#808080",   # Gray
+    "Mixed Use":      "#9400D3",   # Purple
+    "Civic / Public": "#2E75B6",   # Blue
+    "Other":          "#A9A9A9",   # Light gray
+    "Unknown":        "#DDDDDD",   # Very light gray
+}
 
 SEV_COLORS = {
     0: "#808080",
@@ -115,13 +128,14 @@ def load_data():
     return df
 
 
-def make_icon(shape, fill_color, border_color):
+def make_icon(shape, fill_color, border_color, dot_size=22):
     """
-    FIX 1: Bigger shapes (22px) and thicker borders (3px).
+    Build a folium DivIcon using SVG shapes.
+    dot_size controls the marker size — larger = more dangerous lighting.
     shape = 'triangle' for nighttime, 'circle' for daytime.
     """
-    size = 22
-    bw   = 3  # border width
+    size = dot_size
+    bw   = 3
 
     if shape == "triangle":
         pts = f"{size//2},2 {size-2},{size-2} 2,{size-2}"
@@ -153,6 +167,165 @@ def make_icon(shape, fill_color, border_color):
         icon_size=(size, size),
         icon_anchor=(size // 2, size // 2)
     )
+
+
+# ── Land Use Layer Builder ────────────────────────────────────
+def add_land_use_layers(m, df):
+    """
+    Adds three toggleable layers to a folium map:
+
+    1. Zone Color Layer — circles colored by zone category
+       (Residential=green, Commercial=orange, Industrial=gray,
+        Mixed Use=purple, Civic=blue)
+       Only shown if Zone_Category column exists in df.
+
+    2. Schools Layer — school emoji markers at every school
+       loaded from austin_schools.csv
+
+    3. Bus Stops Layer — bus emoji markers at every stop
+       loaded from capmetro_stops.csv
+
+    All three are separate FeatureGroups so they can be
+    toggled on/off independently via the layer control.
+    """
+    import os
+
+    # ── Layer 1: Zone Color Circles ───────────────────────────
+    zone_layer = folium.FeatureGroup(
+        name="&#127963; Zone Categories", show=False
+    )
+    if "Zone_Category" in df.columns:
+        for _, row in df.iterrows():
+            zone = str(row.get("Zone_Category", "Unknown") or "Unknown")
+            color = ZONE_COLORS.get(zone, "#DDDDDD")
+            folium.Circle(
+                location=[row["latitude"], row["longitude"]],
+                radius=80,
+                color=color,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.25,
+                weight=1,
+                tooltip=f"Zone: {zone}",
+                popup=folium.Popup(
+                    f"<b>Zone Category:</b> {zone}<br>"
+                    f"<b>Zone Type:</b> "
+                    f"{str(row.get('Zone_Type','Unknown') or 'Unknown')}",
+                    max_width=200
+                )
+            ).add_to(zone_layer)
+    else:
+        # Zone data not yet in CSV — show placeholder message
+        folium.Marker(
+            location=[30.2672, -97.7431],
+            icon=folium.DivIcon(
+                html='<div style="background:white;padding:8px;'
+                     'border:2px solid orange;border-radius:6px;'
+                     'font-size:11px;font-family:Arial;">'
+                     '&#9888; Zone data not yet in CSV.<br>'
+                     'Re-run main.py to add land use columns.</div>',
+                icon_size=(260, 50), icon_anchor=(130, 25)
+            )
+        ).add_to(zone_layer)
+    zone_layer.add_to(m)
+
+    # ── Layer 2: Schools ──────────────────────────────────────
+    schools_layer = folium.FeatureGroup(
+        name="&#127979; Schools", show=False
+    )
+    if os.path.exists(SCHOOLS_FILE):
+        try:
+            schools = pd.read_csv(SCHOOLS_FILE)
+            lat_col = next(
+                (c for c in schools.columns if "lat" in c.lower()), None
+            )
+            lon_col = next(
+                (c for c in schools.columns if "lon" in c.lower()), None
+            )
+            name_col = next(
+                (c for c in schools.columns
+                 if "name" in c.lower() or "campname" in c.lower()), None
+            )
+            if lat_col and lon_col:
+                schools[lat_col] = pd.to_numeric(
+                    schools[lat_col], errors="coerce"
+                )
+                schools[lon_col] = pd.to_numeric(
+                    schools[lon_col], errors="coerce"
+                )
+                schools = schools.dropna(subset=[lat_col, lon_col])
+                schools = schools[
+                    schools[lat_col].between(30.0, 30.7) &
+                    schools[lon_col].between(-98.1, -97.4)
+                ]
+                for _, s in schools.iterrows():
+                    sname = str(
+                        s.get(name_col, "School") if name_col else "School"
+                    )
+                    folium.Marker(
+                        location=[s[lat_col], s[lon_col]],
+                        icon=folium.DivIcon(
+                            html=(
+                                '<div style="font-size:18px;'
+                                'text-align:center;line-height:1;">'
+                                '&#127979;</div>'
+                            ),
+                            icon_size=(24, 24),
+                            icon_anchor=(12, 12)
+                        ),
+                        tooltip=f"School: {sname}",
+                        popup=folium.Popup(
+                            f"<b>&#127979; {sname}</b>",
+                            max_width=200
+                        )
+                    ).add_to(schools_layer)
+        except Exception as e:
+            print(f"  Schools layer error: {e}")
+    schools_layer.add_to(m)
+
+    # ── Layer 3: Bus Stops ────────────────────────────────────
+    bus_layer = folium.FeatureGroup(
+        name="&#128652; Bus Stops", show=False
+    )
+    if os.path.exists(BUS_STOPS_FILE):
+        try:
+            stops = pd.read_csv(BUS_STOPS_FILE)
+            if "stop_lat" in stops.columns and "stop_lon" in stops.columns:
+                stops["stop_lat"] = pd.to_numeric(
+                    stops["stop_lat"], errors="coerce"
+                )
+                stops["stop_lon"] = pd.to_numeric(
+                    stops["stop_lon"], errors="coerce"
+                )
+                stops = stops.dropna(subset=["stop_lat", "stop_lon"])
+                stops = stops[
+                    stops["stop_lat"].between(30.0, 30.7) &
+                    stops["stop_lon"].between(-98.1, -97.4)
+                ]
+                for _, s in stops.iterrows():
+                    sname = str(s.get("stop_name", "Bus Stop") or "Bus Stop")
+                    folium.Marker(
+                        location=[s["stop_lat"], s["stop_lon"]],
+                        icon=folium.DivIcon(
+                            html=(
+                                '<div style="font-size:14px;'
+                                'text-align:center;line-height:1;">'
+                                '&#128652;</div>'
+                            ),
+                            icon_size=(20, 20),
+                            icon_anchor=(10, 10)
+                        ),
+                        tooltip=f"Bus Stop: {sname}",
+                        popup=folium.Popup(
+                            f"<b>&#128652; {sname}</b>",
+                            max_width=200
+                        )
+                    ).add_to(bus_layer)
+        except Exception as e:
+            print(f"  Bus stops layer error: {e}")
+    bus_layer.add_to(m)
+
+    return m
 
 
 # ── Map 1: Individual Crash Map ───────────────────────────────
@@ -271,6 +444,36 @@ def build_individual_map(df):
             road      = str(row.get("Road_Type_Label", "Unknown") or "Unknown")
             road_name = str(row.get("Road_Name",       "Unknown") or "Unknown")
 
+            # ── Street_Lit → dot size ─────────────────────────
+            # Bigger dot = more dangerous lighting situation
+            # Nighttime + unlit road = largest (most dangerous)
+            # Nighttime + lit road   = medium
+            # Daytime or unknown     = normal size
+            street_lit = str(row.get("Street_Lit", "") or "").lower()
+            dark_unlit = safe_int(row.get("Dark_Unlit", 0))
+            dark_lit   = safe_int(row.get("Dark_Lit",   0))
+
+            if dark_unlit == 1:
+                dot_size  = 14   # Large — nighttime + confirmed unlit
+                lit_text  = "&#10007; No streetlight (unlit road)"
+                lit_color = "#CC0000"
+            elif dark_lit == 1:
+                dot_size  = 10   # Medium — nighttime but lit
+                lit_text  = "&#10003; Streetlight present"
+                lit_color = "#228B22"
+            elif street_lit == "yes":
+                dot_size  = 9    # Normal — daytime but lit road tagged
+                lit_text  = "&#10003; Streetlight present"
+                lit_color = "#228B22"
+            elif street_lit == "no":
+                dot_size  = 9    # Normal — daytime unlit road
+                lit_text  = "&#10007; No streetlight (unlit road)"
+                lit_color = "#CC0000"
+            else:
+                dot_size  = 7    # Default — lighting unknown
+                lit_text  = "&#9898; Unknown (not tagged in OSM)"
+                lit_color = "#888888"
+
             # Full weather details for popup
             temp        = row.get("Temperature", None)
             precip      = row.get("Precipitation", None)
@@ -278,9 +481,9 @@ def build_individual_map(df):
             visibility  = row.get("Visibility", None)
             is_wet      = str(row.get("is_wet", "")).lower()
 
-            temp_d    = f"{temp:.1f}°C"      if pd.notna(temp)       else "N/A"
-            precip_d  = f"{precip:.1f} mm"   if pd.notna(precip)     else "N/A"
-            wind_d    = f"{windspeed:.1f} km/h" if pd.notna(windspeed) else "N/A"
+            temp_d    = f"{temp:.1f}°C"         if pd.notna(temp)       else "N/A"
+            precip_d  = f"{precip:.1f} mm"      if pd.notna(precip)     else "N/A"
+            wind_d    = f"{windspeed:.1f} km/h" if pd.notna(windspeed)  else "N/A"
             vis_d     = f"{int(visibility):,} m" if pd.notna(visibility) else "N/A"
             wet_d     = "Yes" if is_wet == "true" else \
                         "No"  if is_wet == "false" else "Unknown"
@@ -292,6 +495,29 @@ def build_individual_map(df):
                 "road_type_estimate": "&#9888; Road type estimate",
                 "no_match":           "&#10007; No match"
             }.get(aadt_src, aadt_src)
+
+            # Land use fields for popup
+            zone_cat   = str(row.get("Zone_Category",  "Unknown") or "Unknown")
+            zone_typ   = str(row.get("Zone_Type",       "Unknown") or "Unknown")
+            dist_sch   = row.get("Dist_To_School",  None)
+            near_sch   = safe_int(row.get("Near_School",    0))
+            dist_bus   = row.get("Dist_To_Bus_Stop", None)
+            near_bus   = safe_int(row.get("Near_Bus_Stop",  0))
+
+            dist_sch_d = f"{dist_sch:.0f}m" if pd.notna(dist_sch) else "N/A"
+            dist_bus_d = f"{dist_bus:.0f}m" if pd.notna(dist_bus) else "N/A"
+            near_sch_d = "&#10003; Yes" if near_sch else "No"
+            near_bus_d = "&#10003; Yes" if near_bus else "No"
+
+            # Zone category color badge
+            zone_colors = {
+                "Residential":  "#228B22",
+                "Commercial":   "#FF6600",
+                "Industrial":   "#808080",
+                "Mixed Use":    "#9400D3",
+                "Civic / Public": "#2E75B6",
+            }
+            zone_color = zone_colors.get(zone_cat, "#888888")
 
             popup_html = f"""
             <div style="font-family:Arial;font-size:12px;
@@ -348,6 +574,82 @@ def build_individual_map(df):
                   <td style="padding:3px 8px;">{src_t}</td>
                 </tr>
               </table>
+              <div style="background:#f0fff0;border-left:3px solid #228B22;
+                          padding:6px 10px;margin-top:8px;border-radius:3px;">
+                <b style="font-size:12px;">&#127963; Land Use</b>
+                <table style="width:100%;border-collapse:collapse;
+                               margin-top:4px;">
+                  <tr>
+                    <td style="padding:2px 6px;color:#555;width:45%">
+                      Zone</td>
+                    <td style="padding:2px 6px;">
+                      <span style="background:{zone_color};color:white;
+                                   padding:1px 6px;border-radius:3px;
+                                   font-size:11px;">
+                        {zone_cat}
+                      </span>
+                      <span style="color:#888;font-size:10px;">
+                        &nbsp;{zone_typ}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr style="background:rgba(0,0,0,0.03);">
+                    <td style="padding:2px 6px;color:#555;">
+                      Nearest School</td>
+                    <td style="padding:2px 6px;">{dist_sch_d}
+                      &nbsp;<span style="color:{'#228B22' if near_sch
+                        else '#888'};font-size:10px;">
+                        {near_sch_d} (within 300m)
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:2px 6px;color:#555;">
+                      Nearest Bus Stop</td>
+                    <td style="padding:2px 6px;">{dist_bus_d}
+                      &nbsp;<span style="color:{'#2E75B6' if near_bus
+                        else '#888'};font-size:10px;">
+                        {near_bus_d} (within 150m)
+                      </span>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+              <div style="background:#fffbe6;border-left:3px solid #FFA500;
+                          padding:6px 10px;margin-top:8px;border-radius:3px;">
+                <b style="font-size:12px;">&#128294; Street Lighting</b>
+                <table style="width:100%;border-collapse:collapse;
+                               margin-top:4px;">
+                  <tr>
+                    <td style="padding:2px 6px;color:#555;width:45%">
+                      Streetlight</td>
+                    <td style="padding:2px 6px;font-weight:bold;
+                               color:{lit_color};">
+                      {lit_text}
+                    </td>
+                  </tr>
+                  <tr style="background:rgba(0,0,0,0.03);">
+                    <td style="padding:2px 6px;color:#555;">
+                      Time of Day</td>
+                    <td style="padding:2px 6px;">{time_text}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:2px 6px;color:#555;">
+                      Dark + Unlit</td>
+                    <td style="padding:2px 6px;font-weight:bold;
+                               color:{'#CC0000' if dark_unlit else '#555'};">
+                      {'YES — highest lighting risk' if dark_unlit
+                       else 'No'}
+                    </td>
+                  </tr>
+                </table>
+                <div style="font-size:10px;color:#888;margin-top:4px;">
+                  Dot size on map reflects lighting risk.
+                  Larger dot = nighttime + unlit road.
+                  Source: OpenStreetMap lit tag
+                  (partial coverage — major roads only).
+                </div>
+              </div>
               <div style="background:#e8f4fd;border-left:3px solid #1E90FF;
                           padding:6px 10px;margin-top:8px;border-radius:3px;">
                 <b style="font-size:12px;">&#127783; Weather at Crash Time</b>
@@ -389,7 +691,7 @@ def build_individual_map(df):
             </div>
             """
 
-            icon = make_icon(shape, fill_color, border_color)
+            icon = make_icon(shape, fill_color, border_color, dot_size)
             folium.Marker(
                 location=[lat, lon],
                 icon=icon,
@@ -397,7 +699,8 @@ def build_individual_map(df):
                 tooltip=(
                     f"{'&#9650; Night' if is_dark else '&#9679; Day'} | "
                     f"Sev {sev}: {sev_label} | "
-                    f"{cond_text}"
+                    f"{cond_text} | "
+                    f"{'&#128294; Unlit' if dark_unlit else '&#128161; Lit' if street_lit == 'yes' else '&#9898; Lighting unknown'}"
                 )
             ).add_to(sev_layers[sev])
 
@@ -407,11 +710,43 @@ def build_individual_map(df):
     for layer in sev_layers.values():
         layer.add_to(m)
 
-    # FIX 3: Layer control acts as severity toggle
+    # Add land use layers — zone colors, schools, bus stops
+    m = add_land_use_layers(m, df)
+
+    # Layer control — severity toggles + land use layers
     folium.LayerControl(
-        position="bottomright",
+        position="bottomleft",
         collapsed=False
     ).add_to(m)
+
+    # Force layer control to bottom left so it does not
+    # overlap the legend on the right side
+    m.get_root().html.add_child(folium.Element("""
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        var checkControl = setInterval(function() {
+            var ctrl = document.querySelector(
+                ".leaflet-bottom.leaflet-right "
+                + ".leaflet-control-layers"
+            );
+            if (ctrl) {
+                ctrl.style.cssText = (
+                    "position:fixed !important;"
+                    + "bottom:50px !important;"
+                    + "left:15px !important;"
+                    + "right:auto !important;"
+                    + "max-height:280px;"
+                    + "overflow-y:auto;"
+                    + "font-size:12px;"
+                    + "font-family:Arial;"
+                    + "z-index:1000;"
+                );
+                clearInterval(checkControl);
+            }
+        }, 100);
+    });
+    </script>
+    """))
 
     # Legend
     legend_html = """
@@ -442,6 +777,35 @@ def build_individual_map(df):
             fill="#aaa" stroke="#333" stroke-width="2.5"/>
         </svg>
         <span>Circle &#9679; = Daytime (6am&ndash;8pm)</span>
+      </div>
+
+      <h4 style="font-size:11px;font-weight:bold;color:#FFA500;
+                 margin:10px 0 5px;text-transform:uppercase;">
+        Dot Size = Street Lighting Risk
+      </h4>
+      <div style="font-size:11px;color:#555;margin-bottom:5px;">
+        Larger dot = more dangerous lighting situation
+      </div>
+      <div style="display:flex;align-items:center;margin:4px 0;">
+        <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
+          <circle cx="10" cy="10" r="9"
+            fill="#CC0000" stroke="#333" stroke-width="2"/>
+        </svg>
+        <span><b>Large (14px)</b> = Night + unlit road</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:4px 0;">
+        <svg width="18" height="18" style="margin-right:9px;flex-shrink:0;">
+          <circle cx="9" cy="9" r="7"
+            fill="#FF6600" stroke="#333" stroke-width="2"/>
+        </svg>
+        <span><b>Medium (10px)</b> = Night + lit road</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:4px 0;">
+        <svg width="14" height="14" style="margin-right:9px;flex-shrink:0;">
+          <circle cx="7" cy="7" r="5"
+            fill="#aaa" stroke="#333" stroke-width="1.5"/>
+        </svg>
+        <span><b>Small (7px)</b> = Daytime or unknown</span>
       </div>
       <h4 style="font-size:11px;font-weight:bold;color:#2E75B6;
                  margin:10px 0 5px;text-transform:uppercase;">
@@ -592,8 +956,12 @@ def build_individual_map(df):
       <div style="background:#e8f4fd;border-left:3px solid #2E75B6;
                   padding:6px 8px;border-radius:3px;margin-top:10px;
                   font-size:11px;color:#444;">
-        &#127760; Use layer control (bottom right) to toggle
-        individual severity levels on/off
+        &#127760; Use layer control (bottom left) to toggle
+        individual severity levels on/off<br><br>
+        <b>Land use layers (off by default):</b><br>
+        &#127963; Zone Categories — colored circles by zone type<br>
+        &#127979; Schools — school locations<br>
+        &#128652; Bus Stops — CapMetro stop locations
       </div>
     </div>
     """
@@ -688,7 +1056,8 @@ def build_individual_map(df):
       Border=Road Condition &nbsp;|&nbsp; Color=Severity &nbsp;|&nbsp;
       <span style="color:#FF69B4;font-weight:bold;">
         Pink/Magenta rings = repeated crash hotspots
-      </span>
+      </span> &nbsp;|&nbsp;
+      Severity filter: bottom left
     </div>
     """))
 
@@ -715,8 +1084,12 @@ def build_hotspot_map(df):
         avg_severity = ("crash_sev_id", lambda x: x.apply(safe_int).mean()),
         fatal_count  = ("crash_sev_id", lambda x: (x.apply(safe_int) == 4).sum()),
         severe_count = ("crash_sev_id", lambda x: x.apply(safe_int).isin([1, 4]).sum()),
-        night_count  = ("Is_Dark",  lambda x: x.apply(safe_int).sum()),
-        wet_count    = ("is_wet",   lambda x: (x.astype(str).str.lower() == "true").sum()),
+        night_count  = ("Is_Dark",      lambda x: x.apply(safe_int).sum()),
+        wet_count    = ("is_wet",       lambda x: (x.astype(str).str.lower() == "true").sum()),
+        dark_unlit   = ("Dark_Unlit",   lambda x: x.apply(safe_int).sum()),
+        near_school  = ("Near_School",  lambda x: x.apply(safe_int).sum()),
+        near_bus     = ("Near_Bus_Stop",lambda x: x.apply(safe_int).sum()),
+        zone_cat     = ("Zone_Category", safe_mode),
         road_name    = ("Road_Name",        safe_mode),
         road_type    = ("Road_Type_Label",  safe_mode),
         highway_type = ("Highway_Type",     safe_mode)
@@ -743,6 +1116,10 @@ def build_hotspot_map(df):
         severe  = int(cell["severe_count"])
         nights  = int(cell["night_count"])
         wets    = int(cell["wet_count"])
+        dunlit  = int(cell["dark_unlit"])
+        nsch    = int(cell["near_school"])
+        nbus    = int(cell["near_bus"])
+        zone_c  = str(cell.get("zone_cat", "Unknown") or "Unknown")
         avg_sev = round(float(cell["avg_severity"]), 2)
         trail   = bool(cell["is_trail"])
 
@@ -819,9 +1196,36 @@ def build_hotspot_map(df):
               <td style="padding:3px 8px;color:#555;">Wet Road Crashes</td>
               <td style="padding:3px 8px;">&#128167; {wets}</td>
             </tr>
+            <tr style="background:#fff5f5;">
+              <td style="padding:3px 8px;color:#CC0000;font-weight:bold;">
+                Dark + Unlit Crashes</td>
+              <td style="padding:3px 8px;color:#CC0000;font-weight:bold;">
+                &#128294; {dunlit}
+                {'&nbsp;<span style="font-size:10px;">(adding a streetlight may help)</span>'
+                 if dunlit > 0 else ''}
+              </td>
+            </tr>
             <tr style="background:#f5f5f5;">
               <td style="padding:3px 8px;color:#555;">Avg Severity</td>
               <td style="padding:3px 8px;">{avg_sev}</td>
+            </tr>
+            <tr>
+              <td style="padding:3px 8px;color:#555;">Zone</td>
+              <td style="padding:3px 8px;">{zone_c}</td>
+            </tr>
+            <tr style="background:#f5f5f5;">
+              <td style="padding:3px 8px;color:#555;">Near School</td>
+              <td style="padding:3px 8px;color:{'#228B22' if nsch > 0 else '#555'};">
+                {'&#10003; ' + str(nsch) + ' crash(es) within 300m'
+                 if nsch > 0 else 'No'}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:3px 8px;color:#555;">Near Bus Stop</td>
+              <td style="padding:3px 8px;color:{'#2E75B6' if nbus > 0 else '#555'};">
+                {'&#10003; ' + str(nbus) + ' crash(es) within 150m'
+                 if nbus > 0 else 'No'}
+              </td>
             </tr>
           </table>
           <br>
@@ -961,12 +1365,43 @@ def build_hotspot_map(df):
         </div><span>6+ crashes (worst hotspot)</span>
       </div>
       <hr style="margin:10px 0;border:none;border-top:1px solid #eee;">
+      <h4 style="font-size:11px;color:#9400D3;font-weight:bold;
+                 margin:6px 0;text-transform:uppercase;">
+        Zone Category Colors
+      </h4>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <div style="width:14px;height:14px;border-radius:50%;
+          background:#228B22;margin-right:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;">Residential</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <div style="width:14px;height:14px;border-radius:50%;
+          background:#FF6600;margin-right:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;">Commercial</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <div style="width:14px;height:14px;border-radius:50%;
+          background:#9400D3;margin-right:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;">Mixed Use</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <div style="width:14px;height:14px;border-radius:50%;
+          background:#2E75B6;margin-right:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;">Civic / Public</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <div style="width:14px;height:14px;border-radius:50%;
+          background:#808080;margin-right:8px;flex-shrink:0;"></div>
+        <span style="font-size:11px;">Industrial</span>
+      </div>
+      <hr style="margin:10px 0;border:none;border-top:1px solid #eee;">
       <div style="font-size:11px;color:#555;">
         Each cell covers ~100m x 100m on the ground.
         Darker red = more crashes concentrated there.
-        Click any cell for full severity, night,
-        and wet road breakdown.
-        Trail-matched cells show a &#9888; warning.
+        Click any cell for full breakdown.<br><br>
+        <b>Toggle in layer control (bottom left):</b><br>
+        &#127979; Schools &nbsp; &#128652; Bus Stops<br>
+        &#127963; Zone Categories
       </div>
     </div>
     """
@@ -985,7 +1420,38 @@ def build_hotspot_map(df):
     </div>
     """))
 
-    folium.LayerControl().add_to(m)
+    # Add school and bus stop icon layers
+    m = add_land_use_layers(m, df)
+
+    folium.LayerControl(position="bottomleft").add_to(m)
+
+    # Force layer control away from the legend
+    m.get_root().html.add_child(folium.Element("""
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        var checkControl = setInterval(function() {
+            var ctrl = document.querySelector(
+                ".leaflet-bottom.leaflet-right "
+                + ".leaflet-control-layers"
+            );
+            if (ctrl) {
+                ctrl.style.cssText = (
+                    "position:fixed !important;"
+                    + "bottom:50px !important;"
+                    + "left:15px !important;"
+                    + "right:auto !important;"
+                    + "max-height:200px;"
+                    + "overflow-y:auto;"
+                    + "font-size:12px;"
+                    + "font-family:Arial;"
+                    + "z-index:1000;"
+                );
+                clearInterval(checkControl);
+            }
+        }, 100);
+    });
+    </script>
+    """))
     m.save("crash_hotspot_map.html")
     print("  Saved: crash_hotspot_map.html")
 

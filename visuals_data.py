@@ -1,21 +1,20 @@
 # ============================================================
 # visuals_data.py — Austin Crash Safety Prediction System
-# Phase 1: Exploratory Visualizations
+# Phase 1: Exploratory Visualizations (PNG charts only)
+#
+# HTML maps are now handled by crash_frequency_map.py
 #
 # FIXES:
 # - Road_Label now handles None Highway_Type safely
 # - crash_sev_id int cast wrapped in safe conversion
 # - severity_by_road_type pivot guarded against empty data
-# - colormap min/max guarded against equal values
-# - Map popup handles None values safely
+# - Removed old wet/dry map and heatmap (replaced by
+#   crash_individual_map.html and crash_hotspot_map.html)
 # ============================================================
 
-from folium.plugins import HeatMap
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import folium
-import branca.colormap as cm
 
 
 # ── Road type short labels ────────────────────────────────────
@@ -64,8 +63,8 @@ def create_visualizations(df):
     print("Creating visualizations...")
     sns.set_style("whitegrid")
 
-    # ── Working copy with safe Road_Label ────────────────────
-    # FIX: fillna("unknown") before mapping so None values
+    # Working copy with safe Road_Label
+    # fillna("unknown") before mapping so None values
     # get mapped to "Unknown Road Type" instead of NaN
     df = df.copy()
     df["Road_Label"] = (
@@ -125,7 +124,7 @@ def create_visualizations(df):
     # 2. Wet vs Dry Crashes
     # =========================================================
     def map_wet(val):
-        if val is True:   return "Wet"
+        if val is True:    return "Wet"
         elif val is False: return "Dry"
         else:              return "Unknown"
 
@@ -185,7 +184,6 @@ def create_visualizations(df):
     # 5. Crash Severity Distribution
     # =========================================================
     if "crash_sev_id" in df.columns:
-        # FIX: Use safe_int to avoid crash on None severity values
         df["Severity_Label"] = df["crash_sev_id"].apply(
             lambda x: SEVERITY_LABELS.get(safe_int(x), "Unknown")
             if pd.notna(x) else "Unknown"
@@ -226,7 +224,6 @@ def create_visualizations(df):
 
     # =========================================================
     # 6. Crash Severity by Road Type (Heatmap)
-    # FIX: Guard against empty pivot table
     # =========================================================
     if "crash_sev_id" in df.columns:
         pivot_data = df[df["Road_Label"] != "Other"].copy()
@@ -243,7 +240,8 @@ def create_visualizations(df):
                 plt.figure(figsize=(13, 7))
                 sns.heatmap(pivot, annot=True, fmt="d", cmap="YlOrRd",
                             linewidths=0.5, linecolor="gray")
-                plt.title("Crash Severity by Road Type", fontsize=13, fontweight="bold")
+                plt.title("Crash Severity by Road Type", fontsize=13,
+                          fontweight="bold")
                 plt.xlabel("Severity Level", fontsize=11)
                 plt.ylabel("Road Type", fontsize=11)
                 plt.xticks(rotation=20, ha="right")
@@ -254,124 +252,5 @@ def create_visualizations(df):
                 plt.close()
                 print("  Saved: severity_by_road_type.png")
 
-    # =========================================================
-    # 7. Crash Map — Severity + Wet/Dry
-    # FIX: Safe int cast for severity, safe popup text,
-    #      colormap guarded against equal min/max
-    # =========================================================
-    lat_mean = df["latitude"].mean()
-    lon_mean = df["longitude"].mean()
-    m = folium.Map(location=[lat_mean, lon_mean], zoom_start=11)
-
-    if "crash_sev_id" in df.columns:
-        valid_sev = df["crash_sev_id"].dropna()
-        sev_min   = int(valid_sev.min()) if len(valid_sev) > 0 else 0
-        sev_max   = int(valid_sev.max()) if len(valid_sev) > 0 else 5
-        # FIX: prevent colormap error when min == max
-        if sev_min == sev_max:
-            sev_min = max(0, sev_min - 1)
-            sev_max = sev_max + 1
-    else:
-        sev_min, sev_max = 0, 5
-
-    colormap = cm.linear.YlOrRd_09.scale(sev_min, sev_max)
-    colormap.caption = "Crash Severity (0=Unknown → 4=Killed)"
-    colormap.add_to(m)
-
-    # Map legend HTML overlay
-    legend_html = """
-    <div style="position: fixed; bottom: 40px; left: 40px; z-index: 1000;
-                background-color: white; padding: 12px 16px;
-                border: 2px solid gray; border-radius: 8px;
-                font-size: 13px; line-height: 1.7;">
-        <b>Map Legend</b><br>
-        <span style="color:black">&#9679;</span> Black outline = Wet road<br>
-        <span style="color:gray">&#9679;</span> Gray outline = Dry road<br>
-        <span style="color:blue">&#9679;</span> Blue outline = Condition unknown<br>
-        <hr style="margin:6px 0">
-        <b>Severity Colors</b><br>
-        <span style="color:#ffffb2">&#9632;</span> Yellow = Low severity<br>
-        <span style="color:#fd8d3c">&#9632;</span> Orange = Moderate severity<br>
-        <span style="color:#bd0026">&#9632;</span> Red = High severity / Killed
-    </div>
-    """
-    m.get_root().html.add_child(folium.Element(legend_html))
-
-    sample_df = df.sample(min(2000, len(df)))
-
-    for _, row in sample_df.iterrows():
-        # FIX: safe int cast for severity
-        severity = safe_int(row.get("crash_sev_id", 0)) \
-            if pd.notna(row.get("crash_sev_id")) else 0
-
-        wet_val = row.get("is_wet", None)
-        if wet_val is True:
-            outline_color  = "black"
-            condition_text = "Wet"
-        elif wet_val is False:
-            outline_color  = "gray"
-            condition_text = "Dry"
-        else:
-            outline_color  = "blue"
-            condition_text = "Unknown"
-
-        sev_label   = SEVERITY_LABELS.get(severity, "Unknown")
-        road_label  = str(row.get("Road_Type_Label",
-                          row.get("Highway_Type", "N/A")) or "N/A")
-        road_name   = str(row.get("Road_Name", "N/A") or "N/A")
-        aadt_val    = row.get("AADT", "N/A")
-        aadt_source = row.get("AADT_Source", "N/A")
-
-        # FIX: safe popup string — no raw HTML, all values cast to str
-        popup_text = (
-            f"Severity: {severity} — {sev_label} | "
-            f"Road: {road_label} | "
-            f"Name: {road_name} | "
-            f"Condition: {condition_text} | "
-            f"Hour: {row.get('Crash Hour', 'N/A')} | "
-            f"AADT: {aadt_val} ({aadt_source})"
-        )
-
-        folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=6,
-            color=outline_color,
-            fill=True,
-            fill_color=colormap(severity),
-            fill_opacity=0.85,
-            popup=folium.Popup(popup_text, max_width=350)
-        ).add_to(m)
-
-    m.save("crashes_map_severity_wetdry.html")
-    print("  Saved: crashes_map_severity_wetdry.html")
-    print("Visualizations complete!")
-
-
-def create_crash_heatmap(df):
-    print("Creating crash heatmap...")
-
-    lat_mean = df["latitude"].mean()
-    lon_mean = df["longitude"].mean()
-    m = folium.Map(location=[lat_mean, lon_mean], zoom_start=11)
-
-    title_html = """
-    <div style="position: fixed; top: 15px; left: 50%;
-                transform: translateX(-50%); z-index: 1000;
-                background-color: white; padding: 8px 16px;
-                border: 2px solid gray; border-radius: 8px;
-                font-size: 15px; font-weight: bold;">
-        Austin Crash Density Heatmap
-    </div>
-    """
-    m.get_root().html.add_child(folium.Element(title_html))
-
-    if "crash_sev_id" in df.columns:
-        weighted  = df[["latitude", "longitude", "crash_sev_id"]].dropna()
-        heat_data = weighted.values.tolist()
-        print("  Heatmap weighted by crash severity")
-    else:
-        heat_data = df[["latitude", "longitude"]].dropna().values.tolist()
-
-    HeatMap(heat_data, radius=10, blur=15, max_zoom=13).add_to(m)
-    m.save("crash_density_heatmap.html")
-    print("  Saved: crash_density_heatmap.html")
+    print("Visualizations complete — 6 PNG charts saved")
+    print("For HTML maps run: python crash_frequency_map.py")
