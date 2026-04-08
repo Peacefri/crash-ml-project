@@ -205,8 +205,25 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Cache files — auto-generated, do not commit
 austin_road_network.pkl
+aadt_cache.pkl
 weather_cache.json
+
+# Large data files — download instructions in each .py file
 crashes_working.csv
 crashes_full_filtered.csv
 crashes_final_enriched.csv
+crashes_checkpoint.csv
+txdot_aadt.csv
+austin_zoning.csv
+austin_schools.csv
+capmetro_stops.csv
+
+# Temporary files
+run_log.txt
+
+# Python compiled files
+__pycache__/
+*.pyc
