@@ -69,7 +69,7 @@ def load_data():
         header=0,
         names=cols,
         low_memory=False,
-        nrows=500          # Remove this line for the full overnight run
+        nrows=700         # Remove this line for the full overnight run
     )
     df.columns = df.columns.str.strip()
     df = df.reset_index(drop=True)
