@@ -6,6 +6,9 @@
 # - Added visibility to hourly params with correct field name
 # - Added null value check before returning API results
 # - Improved error messages to identify exact failure point
+# - Added Overcast weather code (3-9) that was missing
+# - Cache now saves every 100 calls instead of every call
+#   (prevents excessive disk writes on full 90k run)
 # ============================================================
 
 import requests
@@ -13,6 +16,7 @@ import json
 import os
 
 WEATHER_CACHE_FILE = "weather_cache.json"
+_cache_write_count = 0   # Track how many new entries added this session
 
 # Load persistent cache from disk if it exists
 if os.path.exists(WEATHER_CACHE_FILE):
@@ -37,6 +41,8 @@ def get_weather(lat, lon, date, hour):
     Returns: (temp, precip, windspeed, visibility, weathercode)
     All values can be None if the API call fails or data is missing.
     """
+    global _cache_write_count
+
     lat  = round(lat, 2)
     lon  = round(lon, 2)
     hour = int(hour)
@@ -105,9 +111,12 @@ def get_weather(lat, lon, date, hour):
 
         result = (temp, precip, windspeed, visibility, weathercode)
 
-        # Save to cache and persist
+        # Save to cache — write to disk every 100 new entries
+        # to avoid excessive disk I/O on the full 90k run
         weather_cache[key] = list(result)
-        save_cache()
+        _cache_write_count += 1
+        if _cache_write_count % 100 == 0:
+            save_cache()
 
         return result
 
@@ -127,14 +136,27 @@ def decode_weathercode(code):
     """
     Translate WMO weather code into a human-readable category.
     Used for feature engineering and visualizations.
+
+    WMO code ranges:
+        0       = Clear
+        1-2     = Partly Cloudy
+        3-9     = Overcast (was missing — caused "Other" for common codes)
+        10-19   = Foggy
+        20-29   = Drizzle
+        51-67   = Rain
+        71-77   = Snow
+        80-82   = Rain Showers
+        95-99   = Thunderstorm
     """
     if code is None:
         return "Unknown"
     code = int(code)
     if code == 0:
         return "Clear"
-    elif code in range(1, 4):
+    elif code in range(1, 3):
         return "Partly Cloudy"
+    elif code in range(3, 10):
+        return "Overcast"      # FIX: was missing, fell through to "Other"
     elif code in range(10, 20):
         return "Foggy"
     elif code in range(20, 30):

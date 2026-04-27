@@ -6,7 +6,7 @@
 #   Highway_Type, Road_Type_Label, Road_Name
 #   Num_Lanes, Speed_Limit, Road_Risk_Level
 #   Is_Intersection, Intersection_Degree
-#   Road_Curvature, Street_Lit (NEW)
+#   Road_Curvature, Street_Lit
 #
 # FIXES:
 #   - Added missing highway tags (track, path, pedestrian etc)
@@ -14,6 +14,7 @@
 #   - Non-driveable road filter (trails, paths, footways)
 #   - Trail road name leak fix
 #   - Street_Lit tag added (yes/no/None from OpenStreetMap)
+#   - Curvature near-zero threshold fix (was == 0, now < 1e-10)
 # ============================================================
 
 import osmnx as ox
@@ -124,6 +125,9 @@ def calculate_curvature(geometry):
     """
     Measures how much a road segment deviates from a straight line.
     Returns ratio where 1.0 = perfectly straight, higher = more curved.
+
+    FIX: Uses < 1e-10 threshold instead of == 0 to avoid returning
+    astronomically large ratios for near-zero straight distances.
     """
     try:
         if geometry is None or geometry.geom_type != "LineString":
@@ -138,7 +142,8 @@ def calculate_curvature(geometry):
             np.linalg.norm(np.array(coords[i + 1]) - np.array(coords[i]))
             for i in range(len(coords) - 1)
         )
-        if straight_dist == 0:
+        # FIX: was `if straight_dist == 0` — now uses safe threshold
+        if straight_dist < 1e-10:
             return None
         return round(actual_dist / straight_dist, 4)
     except Exception:
@@ -286,9 +291,9 @@ def get_road_type(lat, lon):
         )
 
 
-# ── Row-wise Wrapper ─────────────────────────────────────────
+# ── Row-wise Wrapper (unused — kept for Phase 2 df.apply use) ─
 def process_road(row):
-    """Row-wise wrapper for use with df.apply()"""
+    """Row-wise wrapper for use with df.apply() in Phase 2"""
     (highway, highway_label, lanes, road_risk, speed,
      is_intersection, intersection_degree,
      curvature, road_name, lit) = get_road_type(

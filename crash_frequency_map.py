@@ -12,6 +12,14 @@
 #   Grid frequency + top 10 hotspot ranking (trails excluded)
 #
 # Run locally:  python crash_frequency_map.py
+#
+# FIXES:
+#   - hidden count: was hardcoded 1000-shown, now len(df)-shown
+#   - daytime count: was hardcoded 1000-night, now len(df)-night
+#   - severity counts in stats panel: were hardcoded numbers,
+#     now calculated dynamically from df
+#   - Added "Overcast" to WEATHER_COLORS (was missing, matched
+#     new decode_weathercode fix in weather_data.py)
 # ============================================================
 
 import pandas as pd
@@ -25,13 +33,13 @@ BUS_STOPS_FILE = "capmetro_stops.csv"
 
 # ── Zone category colors ──────────────────────────────────────
 ZONE_COLORS = {
-    "Residential":    "#228B22",   # Green
-    "Commercial":     "#FF6600",   # Orange
-    "Industrial":     "#808080",   # Gray
-    "Mixed Use":      "#9400D3",   # Purple
-    "Civic / Public": "#2E75B6",   # Blue
-    "Other":          "#A9A9A9",   # Light gray
-    "Unknown":        "#DDDDDD",   # Very light gray
+    "Residential":    "#228B22",
+    "Commercial":     "#FF6600",
+    "Industrial":     "#808080",
+    "Mixed Use":      "#9400D3",
+    "Civic / Public": "#2E75B6",
+    "Other":          "#A9A9A9",
+    "Unknown":        "#DDDDDD",
 }
 
 SEV_COLORS = {
@@ -57,6 +65,7 @@ SEV_LABELS = {
 WEATHER_COLORS = {
     "Clear":                  "#87CEEB",   # Sky blue
     "Partly Cloudy":          "#B0C4DE",   # Steel blue
+    "Overcast":               "#778899",   # Light slate gray (FIX: was missing)
     "Drizzle":                "#4682B4",   # Medium blue
     "Rain":                   "#0000CD",   # Dark blue
     "Rain Showers":           "#1E90FF",   # Dodger blue
@@ -69,15 +78,12 @@ WEATHER_COLORS = {
 SKIP_WEATHER = {"Unknown", None, ""}
 
 
-# ── FIX 2: Road types that are NOT roads — exclude from ranking
-# These are trails, paths, and non-vehicular ways that OSMnx
-# sometimes snaps to when the actual road is nearby
+# ── Road types that are NOT roads — exclude from ranking ─────
 NON_ROAD_TYPES = {
     "path", "track", "footway", "cycleway",
     "pedestrian", "steps", "bridleway"
 }
 
-# FIX 2: Keywords in road names that indicate a trail not a road
 TRAIL_KEYWORDS = [
     "trail", "trailhead", "greenway", "greenbelt",
     "hike", "bike path", "creek path"
@@ -116,7 +122,6 @@ def load_data():
     df = pd.read_csv(INPUT_FILE)
     print(f"Loaded {len(df)} crash records")
 
-    # FIX 2: Flag trail crashes so we can exclude from ranking
     df["Is_Trail"] = df.apply(
         lambda r: is_trail(r.get("Road_Name"), r.get("Highway_Type")),
         axis=1
@@ -173,20 +178,9 @@ def make_icon(shape, fill_color, border_color, dot_size=22):
 def add_land_use_layers(m, df):
     """
     Adds three toggleable layers to a folium map:
-
     1. Zone Color Layer — circles colored by zone category
-       (Residential=green, Commercial=orange, Industrial=gray,
-        Mixed Use=purple, Civic=blue)
-       Only shown if Zone_Category column exists in df.
-
-    2. Schools Layer — school emoji markers at every school
-       loaded from austin_schools.csv
-
-    3. Bus Stops Layer — bus emoji markers at every stop
-       loaded from capmetro_stops.csv
-
-    All three are separate FeatureGroups so they can be
-    toggled on/off independently via the layer control.
+    2. Schools Layer — school emoji markers
+    3. Bus Stops Layer — bus emoji markers
     """
     import os
 
@@ -215,7 +209,6 @@ def add_land_use_layers(m, df):
                 )
             ).add_to(zone_layer)
     else:
-        # Zone data not yet in CSV — show placeholder message
         folium.Marker(
             location=[30.2672, -97.7431],
             icon=folium.DivIcon(
@@ -332,7 +325,6 @@ def add_land_use_layers(m, df):
 def build_individual_map(df):
     print("\nBuilding Map 1 — Individual crash map...")
 
-    # FIX 4: Tighter zoom centered on Austin city center
     m = folium.Map(
         location=[30.2672, -97.7431],
         zoom_start=12,
@@ -344,9 +336,6 @@ def build_individual_map(df):
     df["lon_r"] = df["longitude"].round(3)
     loc_counts  = df.groupby(["lat_r", "lon_r"]).size().reset_index(name="n")
 
-    # Ring colors are MAGENTA/PINK — completely absent from the
-    # severity palette so zero confusion. Made larger so they
-    # dominate the map visually and signal problem areas clearly.
     RING_COLORS = {
         "high":   "#FF00FF",   # Bright magenta = 5+ crashes
         "medium": "#C71585",   # Deep pink/rose = 3-4 crashes
@@ -359,7 +348,7 @@ def build_individual_map(df):
         n = int(spot["n"])
         if n >= 5:
             color   = RING_COLORS["high"]
-            radius  = 350        # Very large — dominant on map
+            radius  = 350
             weight  = 5
             opacity = 0.25
             label   = f"MAJOR HOTSPOT: {n} crashes at this location"
@@ -404,7 +393,6 @@ def build_individual_map(df):
     ring_layer.add_to(m)
 
     # Crash markers — one FeatureGroup per severity for filtering
-    # FIX 3: Separate layer per severity so toggle buttons work
     sev_layers = {}
     for sev_code, sev_label in SEV_LABELS.items():
         layer = folium.FeatureGroup(
@@ -422,12 +410,10 @@ def build_individual_map(df):
             fill_color  = SEV_COLORS.get(sev, "#808080")
             sev_label   = SEV_LABELS.get(sev, "Unknown")
 
-            # ── Weather condition → border color ──────────────
-            # Full weather condition replaces wet/dry binary flag
-            # Unknown weather crashes are skipped — not shown
+            # Weather condition → border color
             weather   = str(row.get("Weather_Condition", "") or "")
             if weather in SKIP_WEATHER or weather not in WEATHER_COLORS:
-                continue   # Skip unknown weather crashes entirely
+                continue
             border_color = WEATHER_COLORS[weather]
             cond_text    = weather
 
@@ -444,37 +430,31 @@ def build_individual_map(df):
             road      = str(row.get("Road_Type_Label", "Unknown") or "Unknown")
             road_name = str(row.get("Road_Name",       "Unknown") or "Unknown")
 
-            # ── Street_Lit → dot size ─────────────────────────
-            # Bigger dot = more dangerous lighting situation
-            # Nighttime + unlit road = largest (most dangerous)
-            # Nighttime + lit road   = medium
-            # Daytime or unknown     = normal size
             street_lit = str(row.get("Street_Lit", "") or "").lower()
             dark_unlit = safe_int(row.get("Dark_Unlit", 0))
             dark_lit   = safe_int(row.get("Dark_Lit",   0))
 
             if dark_unlit == 1:
-                dot_size  = 14   # Large — nighttime + confirmed unlit
+                dot_size  = 14
                 lit_text  = "&#10007; No streetlight (unlit road)"
                 lit_color = "#CC0000"
             elif dark_lit == 1:
-                dot_size  = 10   # Medium — nighttime but lit
+                dot_size  = 10
                 lit_text  = "&#10003; Streetlight present"
                 lit_color = "#228B22"
             elif street_lit == "yes":
-                dot_size  = 9    # Normal — daytime but lit road tagged
+                dot_size  = 9
                 lit_text  = "&#10003; Streetlight present"
                 lit_color = "#228B22"
             elif street_lit == "no":
-                dot_size  = 9    # Normal — daytime unlit road
+                dot_size  = 9
                 lit_text  = "&#10007; No streetlight (unlit road)"
                 lit_color = "#CC0000"
             else:
-                dot_size  = 7    # Default — lighting unknown
+                dot_size  = 7
                 lit_text  = "&#9898; Unknown (not tagged in OSM)"
                 lit_color = "#888888"
 
-            # Full weather details for popup
             temp        = row.get("Temperature", None)
             precip      = row.get("Precipitation", None)
             windspeed   = row.get("Windspeed", None)
@@ -496,7 +476,6 @@ def build_individual_map(df):
                 "no_match":           "&#10007; No match"
             }.get(aadt_src, aadt_src)
 
-            # Land use fields for popup
             zone_cat   = str(row.get("Zone_Category",  "Unknown") or "Unknown")
             zone_typ   = str(row.get("Zone_Type",       "Unknown") or "Unknown")
             dist_sch   = row.get("Dist_To_School",  None)
@@ -509,7 +488,6 @@ def build_individual_map(df):
             near_sch_d = "&#10003; Yes" if near_sch else "No"
             near_bus_d = "&#10003; Yes" if near_bus else "No"
 
-            # Zone category color badge
             zone_colors = {
                 "Residential":  "#228B22",
                 "Commercial":   "#FF6600",
@@ -710,17 +688,13 @@ def build_individual_map(df):
     for layer in sev_layers.values():
         layer.add_to(m)
 
-    # Add land use layers — zone colors, schools, bus stops
     m = add_land_use_layers(m, df)
 
-    # Layer control — severity toggles + land use layers
     folium.LayerControl(
         position="bottomleft",
         collapsed=False
     ).add_to(m)
 
-    # Force layer control to bottom left so it does not
-    # overlap the legend on the right side
     m.get_root().html.add_child(folium.Element("""
     <script>
     document.addEventListener("DOMContentLoaded", function() {
@@ -748,7 +722,6 @@ def build_individual_map(df):
     </script>
     """))
 
-    # Legend
     legend_html = """
     <div style="position:fixed;top:15px;right:15px;z-index:1000;
                 background:white;padding:16px 20px;border-radius:10px;
@@ -778,7 +751,6 @@ def build_individual_map(df):
         </svg>
         <span>Circle &#9679; = Daytime (6am&ndash;8pm)</span>
       </div>
-
       <h4 style="font-size:11px;font-weight:bold;color:#FFA500;
                  margin:10px 0 5px;text-transform:uppercase;">
         Dot Size = Street Lighting Risk
@@ -817,64 +789,61 @@ def build_individual_map(df):
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#87CEEB" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#87CEEB" stroke-width="3"/></svg>
         <span>Sky blue = Clear</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#B0C4DE" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#B0C4DE" stroke-width="3"/></svg>
         <span>Steel blue = Partly Cloudy</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#4682B4" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#778899" stroke-width="3"/></svg>
+        <span>Light slate = Overcast</span>
+      </div>
+      <div style="display:flex;align-items:center;margin:3px 0;">
+        <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
+          <circle cx="10" cy="10" r="8"
+            fill="white" stroke="#4682B4" stroke-width="3"/></svg>
         <span>Medium blue = Drizzle</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#0000CD" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#0000CD" stroke-width="3"/></svg>
         <span>Dark blue = Rain</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#1E90FF" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#1E90FF" stroke-width="3"/></svg>
         <span>Dodger blue = Rain Showers</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#8B008B" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#8B008B" stroke-width="3"/></svg>
         <span>Dark magenta = Thunderstorm</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#708090" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#708090" stroke-width="3"/></svg>
         <span>Slate gray = Foggy</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#00CED1" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#00CED1" stroke-width="3"/></svg>
         <span>Turquoise = Snow</span>
       </div>
       <div style="display:flex;align-items:center;margin:3px 0;">
         <svg width="20" height="20" style="margin-right:9px;flex-shrink:0;">
           <circle cx="10" cy="10" r="8"
-            fill="white" stroke="#A9A9A9" stroke-width="3"/>
-        </svg>
+            fill="white" stroke="#A9A9A9" stroke-width="3"/></svg>
         <span>Dark gray = Other</span>
       </div>
       <h4 style="font-size:11px;font-weight:bold;color:#2E75B6;
@@ -926,32 +895,25 @@ def build_individual_map(df):
                   padding:5px 8px;border-radius:3px;">
         Pink/magenta rings mark locations where MULTIPLE crashes
         happened over time. Larger ring = more crashes = bigger
-        safety problem. This color does not appear anywhere else
-        on the map so it is impossible to confuse with severity.
+        safety problem.
       </div>
       <div style="display:flex;align-items:center;margin:5px 0;">
         <div style="width:22px;height:22px;border-radius:50%;
           border:4px solid #FF00FF;background:rgba(255,0,255,0.18);
           margin-right:9px;flex-shrink:0;"></div>
-        <span><b>Bright magenta</b> = 5+ crashes<br>
-        <span style="font-size:10px;color:#888;">
-          Major problem area — largest ring</span></span>
+        <span><b>Bright magenta</b> = 5+ crashes</span>
       </div>
       <div style="display:flex;align-items:center;margin:5px 0;">
         <div style="width:20px;height:20px;border-radius:50%;
           border:3px solid #C71585;background:rgba(199,21,133,0.15);
           margin-right:9px;flex-shrink:0;"></div>
-        <span><b>Deep pink</b> = 3&ndash;4 crashes<br>
-        <span style="font-size:10px;color:#888;">
-          High frequency location</span></span>
+        <span><b>Deep pink</b> = 3&ndash;4 crashes</span>
       </div>
       <div style="display:flex;align-items:center;margin:5px 0;">
         <div style="width:18px;height:18px;border-radius:50%;
           border:3px solid #FF69B4;background:rgba(255,105,180,0.12);
           margin-right:9px;flex-shrink:0;"></div>
-        <span><b>Hot pink</b> = 2 crashes<br>
-        <span style="font-size:10px;color:#888;">
-          Repeated location</span></span>
+        <span><b>Hot pink</b> = 2 crashes</span>
       </div>
       <div style="background:#e8f4fd;border-left:3px solid #2E75B6;
                   padding:6px 8px;border-radius:3px;margin-top:10px;
@@ -959,16 +921,23 @@ def build_individual_map(df):
         &#127760; Use layer control (bottom left) to toggle
         individual severity levels on/off<br><br>
         <b>Land use layers (off by default):</b><br>
-        &#127963; Zone Categories — colored circles by zone type<br>
-        &#127979; Schools — school locations<br>
-        &#128652; Bus Stops — CapMetro stop locations
+        &#127963; Zone Categories<br>
+        &#127979; Schools<br>
+        &#128652; Bus Stops
       </div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    # Stats panel — shows weather condition breakdown
-    night = int(df["Is_Dark"].sum()) if "Is_Dark" in df.columns else 0
+    # ── Stats panel — all counts calculated dynamically ───────
+    # FIX: no more hardcoded 1000 — all values from actual df
+    total_rows = len(df)
+    night      = int(df["Is_Dark"].sum()) if "Is_Dark" in df.columns else 0
+    shown      = int(df["Weather_Condition"].isin(list(WEATHER_COLORS.keys())).sum())
+    hidden     = total_rows - shown          # FIX: was hardcoded 1000-shown
+    daytime    = total_rows - night          # FIX: was hardcoded 1000-night
+
+    # Dynamic weather breakdown
     weather_counts = df["Weather_Condition"].value_counts()
     weather_rows = ""
     for cond, cnt in weather_counts.items():
@@ -984,8 +953,27 @@ def build_individual_map(df):
             f'<span style="font-weight:bold;">{cnt}</span>'
             f'</div>'
         )
-    shown  = int(df["Weather_Condition"].isin(list(WEATHER_COLORS.keys())).sum())
-    hidden = 500 - shown
+
+    # Dynamic severity breakdown — FIX: was hardcoded numbers
+    sev_counts = df["crash_sev_id"].apply(safe_int).value_counts()
+    sev_html = ""
+    sev_display = [
+        (4, "#CC0000",  "#CC0000",  "Killed"),
+        (1, "#FF6600",  "#FF6600",  "Incapacitating"),
+        (2, "#ccaa00",  "#ccaa00",  "Non-Incapacitating"),
+        (3, "#3a7a3a",  "#555555",  "Possible Injury"),
+        (5, "#228B22",  "#228B22",  "Not Injured"),
+        (0, "#808080",  "#808080",  "Unknown"),
+    ]
+    for code, label_col, count_col, label_text in sev_display:
+        cnt = int(sev_counts.get(code, 0))
+        sev_html += (
+            f'<div style="display:flex;justify-content:space-between;gap:10px;">'
+            f'<span><b style="color:{label_col};">{code}</b> {label_text}</span>'
+            f'<span style="font-weight:bold;color:{count_col};">{cnt}</span>'
+            f'</div>'
+        )
+
     stats_html = f"""
     <div style="position:fixed;top:15px;left:15px;z-index:1000;
                 background:white;padding:14px 18px;border-radius:10px;
@@ -1011,36 +999,13 @@ def build_individual_map(df):
       </div>
       <div style="display:flex;justify-content:space-between;gap:10px;">
         <span style="color:#555;">&#9679; Daytime</span>
-        <span style="font-weight:bold;">{500-night}</span>
+        <span style="font-weight:bold;">{daytime}</span>
       </div>
       <hr style="margin:5px 0;border:none;border-top:1px solid #eee;">
       <b style="font-size:11px;color:#2E75B6;">Weather at Crash Time:</b>
       <div style="margin-top:3px;">{weather_rows}</div>
       <hr style="margin:5px 0;border:none;border-top:1px solid #eee;">
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#CC0000;">4</b> Killed</span>
-        <span style="font-weight:bold;color:#CC0000;">4</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#FF6600;">1</b> Incapacitating</span>
-        <span style="font-weight:bold;color:#FF6600;">29</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#ccaa00;">2</b> Non-Incapacitating</span>
-        <span style="font-weight:bold;color:#ccaa00;">100</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#3a7a3a;">3</b> Possible Injury</span>
-        <span style="font-weight:bold;">103</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#228B22;">5</b> Not Injured</span>
-        <span style="font-weight:bold;color:#228B22;">192</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <span><b style="color:#808080;">0</b> Unknown</span>
-        <span style="font-weight:bold;color:#808080;">72</span>
-      </div>
+      {sev_html}
     </div>
     """
     m.get_root().html.add_child(folium.Element(stats_html))
@@ -1069,7 +1034,6 @@ def build_individual_map(df):
 def build_hotspot_map(df):
     print("\nBuilding Map 2 — Crash hotspot grid...")
 
-    # FIX 4: Tighter zoom
     m = folium.Map(
         location=[30.2672, -97.7431],
         zoom_start=12,
@@ -1095,7 +1059,6 @@ def build_hotspot_map(df):
         highway_type = ("Highway_Type",     safe_mode)
     ).reset_index()
 
-    # FIX 2: Flag trail cells in grid
     grid["is_trail"] = grid.apply(
         lambda r: is_trail(r["road_name"], r["highway_type"]), axis=1
     )
@@ -1143,7 +1106,6 @@ def build_hotspot_map(df):
                 f'</tr>'
             )
 
-        # FIX 2: Show trail warning in popup if detected
         trail_warning = ""
         if trail:
             trail_warning = (
@@ -1262,7 +1224,6 @@ def build_hotspot_map(df):
     grid_layer.add_to(m)
     colormap.add_to(m)
 
-    # FIX 2: Top 10 excludes trail cells
     grid_road = grid[~grid["is_trail"]]
     top10 = grid_road.nlargest(10, "crash_count")[
         ["lat_r", "lon_r", "crash_count", "road_name",
@@ -1365,36 +1326,6 @@ def build_hotspot_map(df):
         </div><span>6+ crashes (worst hotspot)</span>
       </div>
       <hr style="margin:10px 0;border:none;border-top:1px solid #eee;">
-      <h4 style="font-size:11px;color:#9400D3;font-weight:bold;
-                 margin:6px 0;text-transform:uppercase;">
-        Zone Category Colors
-      </h4>
-      <div style="display:flex;align-items:center;margin:3px 0;">
-        <div style="width:14px;height:14px;border-radius:50%;
-          background:#228B22;margin-right:8px;flex-shrink:0;"></div>
-        <span style="font-size:11px;">Residential</span>
-      </div>
-      <div style="display:flex;align-items:center;margin:3px 0;">
-        <div style="width:14px;height:14px;border-radius:50%;
-          background:#FF6600;margin-right:8px;flex-shrink:0;"></div>
-        <span style="font-size:11px;">Commercial</span>
-      </div>
-      <div style="display:flex;align-items:center;margin:3px 0;">
-        <div style="width:14px;height:14px;border-radius:50%;
-          background:#9400D3;margin-right:8px;flex-shrink:0;"></div>
-        <span style="font-size:11px;">Mixed Use</span>
-      </div>
-      <div style="display:flex;align-items:center;margin:3px 0;">
-        <div style="width:14px;height:14px;border-radius:50%;
-          background:#2E75B6;margin-right:8px;flex-shrink:0;"></div>
-        <span style="font-size:11px;">Civic / Public</span>
-      </div>
-      <div style="display:flex;align-items:center;margin:3px 0;">
-        <div style="width:14px;height:14px;border-radius:50%;
-          background:#808080;margin-right:8px;flex-shrink:0;"></div>
-        <span style="font-size:11px;">Industrial</span>
-      </div>
-      <hr style="margin:10px 0;border:none;border-top:1px solid #eee;">
       <div style="font-size:11px;color:#555;">
         Each cell covers ~100m x 100m on the ground.
         Darker red = more crashes concentrated there.
@@ -1420,12 +1351,10 @@ def build_hotspot_map(df):
     </div>
     """))
 
-    # Add school and bus stop icon layers
     m = add_land_use_layers(m, df)
 
     folium.LayerControl(position="bottomleft").add_to(m)
 
-    # Force layer control away from the legend
     m.get_root().html.add_child(folium.Element("""
     <script>
     document.addEventListener("DOMContentLoaded", function() {
@@ -1470,14 +1399,7 @@ def main():
     print("  Done! Two HTML maps generated:")
     print()
     print("  crash_individual_map.html")
-    print("    FIX 1: Bigger shapes (22px) thicker borders (3px)")
-    print("    FIX 3: Layer control toggles severity levels")
-    print("    FIX 4: Zoomed to Austin city center")
-    print()
     print("  crash_hotspot_map.html")
-    print("    FIX 2: Purple Heart Trail excluded from top 10")
-    print("    FIX 2: Trail cells show warning in popup")
-    print("    FIX 4: Zoomed to Austin city center")
     print("=" * 55)
 
 

@@ -6,6 +6,10 @@
 # FIX: Distance-only matching replaced with road-name matching
 # + road type fallback. Prevents assigning highway AADT to
 # crashes that happened on completely different nearby roads.
+#
+# FIX: Distance check now uses `continue` instead of `break`
+# so all 5 candidate stations are checked even if the nearest
+# one is beyond the search radius.
 # ============================================================
 
 import pandas as pd
@@ -211,9 +215,10 @@ def get_aadt(lat, lon, crash_year, road_name=None,
         for i in range(k):
             dist_km = dist_rad[0][i] * 6371  # radians to km
 
-            # Stop if beyond search radius
+            # FIX: use continue not break — check all 5 stations
+            # even if one is beyond the radius, others may still match
             if dist_km > max_distance_km:
-                break
+                continue
 
             station      = _aadt_df.iloc[idx[0][i]]
             station_road = station.get("ON_ROAD_UPPER", "")
@@ -248,6 +253,7 @@ def get_aadt(lat, lon, crash_year, road_name=None,
 
 
 # ── Crash Rate Calculator ────────────────────────────────────
+# Phase 2: call this after grouping crashes by road segment
 def calculate_crash_rate(crash_count, aadt, segment_length_km=0.1):
     """
     Calculate crash rate per million vehicle miles traveled (MVMT).
@@ -268,9 +274,9 @@ def calculate_crash_rate(crash_count, aadt, segment_length_km=0.1):
     return round((crash_count * 1_000_000) / annual_vmt, 4)
 
 
-# ── Row-wise Wrapper ─────────────────────────────────────────
+# ── Row-wise Wrapper (unused — kept for Phase 2 df.apply use) ─
 def process_aadt(row):
-    """Row-wise wrapper for use with df.apply()"""
+    """Row-wise wrapper for use with df.apply() in Phase 2"""
     lat       = row.get("latitude")
     lon       = row.get("longitude")
     timestamp = row.get("Crash timestamp (US/Central)")

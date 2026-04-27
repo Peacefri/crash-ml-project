@@ -10,6 +10,10 @@
 # - severity_by_road_type pivot guarded against empty data
 # - Removed old wet/dry map and heatmap (replaced by
 #   crash_individual_map.html and crash_hotspot_map.html)
+# - Print statement now says "PNG charts saved" not hardcoded 6
+# - Severity charts now use pre-built Severity_Label from main.py
+#   instead of recalculating (was redundant)
+# - map_wet() now handles string "True"/"False" from reloaded CSVs
 # ============================================================
 
 import matplotlib.pyplot as plt
@@ -74,6 +78,8 @@ def create_visualizations(df):
         .fillna("Other")
     )
 
+    charts_saved = []
+
     # =========================================================
     # 1. Crashes by Road Type
     # =========================================================
@@ -118,15 +124,20 @@ def create_visualizations(df):
     plt.tight_layout()
     plt.savefig("crashes_by_road_type.png", bbox_inches="tight", dpi=150)
     plt.close()
-    print("  Saved: crashes_by_road_type.png")
+    charts_saved.append("crashes_by_road_type.png")
 
     # =========================================================
     # 2. Wet vs Dry Crashes
+    # FIX: handles both boolean True/False (in-memory) and
+    #      string "True"/"False" (after CSV reload)
     # =========================================================
     def map_wet(val):
-        if val is True:    return "Wet"
-        elif val is False: return "Dry"
-        else:              return "Unknown"
+        if val is True or str(val).lower() == "true":
+            return "Wet"
+        elif val is False or str(val).lower() == "false":
+            return "Dry"
+        else:
+            return "Unknown"
 
     df["Road_Condition"] = df["is_wet"].apply(map_wet)
 
@@ -143,7 +154,7 @@ def create_visualizations(df):
     plt.tight_layout()
     plt.savefig("crashes_wet_vs_dry.png", dpi=150)
     plt.close()
-    print("  Saved: crashes_wet_vs_dry.png")
+    charts_saved.append("crashes_wet_vs_dry.png")
 
     # =========================================================
     # 3. Crashes by Hour of Day
@@ -158,7 +169,7 @@ def create_visualizations(df):
     plt.tight_layout()
     plt.savefig("crashes_by_hour.png", dpi=150)
     plt.close()
-    print("  Saved: crashes_by_hour.png")
+    charts_saved.append("crashes_by_hour.png")
 
     # =========================================================
     # 4. Crashes by Day of Week
@@ -178,16 +189,14 @@ def create_visualizations(df):
     plt.tight_layout()
     plt.savefig("crashes_by_day.png", dpi=150)
     plt.close()
-    print("  Saved: crashes_by_day.png")
+    charts_saved.append("crashes_by_day.png")
 
     # =========================================================
     # 5. Crash Severity Distribution
+    # FIX: uses Severity_Label already created by main.py
+    #      instead of recalculating from crash_sev_id here
     # =========================================================
-    if "crash_sev_id" in df.columns:
-        df["Severity_Label"] = df["crash_sev_id"].apply(
-            lambda x: SEVERITY_LABELS.get(safe_int(x), "Unknown")
-            if pd.notna(x) else "Unknown"
-        )
+    if "Severity_Label" in df.columns:
         sev_order = list(SEVERITY_LABELS.values())
 
         plt.figure(figsize=(10, 6))
@@ -220,18 +229,14 @@ def create_visualizations(df):
         plt.tight_layout()
         plt.savefig("crashes_by_severity.png", bbox_inches="tight", dpi=150)
         plt.close()
-        print("  Saved: crashes_by_severity.png")
+        charts_saved.append("crashes_by_severity.png")
 
     # =========================================================
     # 6. Crash Severity by Road Type (Heatmap)
     # =========================================================
-    if "crash_sev_id" in df.columns:
+    if "Severity_Label" in df.columns:
         pivot_data = df[df["Road_Label"] != "Other"].copy()
         if len(pivot_data) > 0:
-            pivot_data["Severity_Label"] = pivot_data["crash_sev_id"].apply(
-                lambda x: SEVERITY_LABELS.get(safe_int(x), "Unknown")
-                if pd.notna(x) else "Unknown"
-            )
             pivot = pivot_data.groupby(
                 ["Road_Label", "Severity_Label"]
             ).size().unstack(fill_value=0)
@@ -250,7 +255,10 @@ def create_visualizations(df):
                 plt.savefig("severity_by_road_type.png",
                             bbox_inches="tight", dpi=150)
                 plt.close()
-                print("  Saved: severity_by_road_type.png")
+                charts_saved.append("severity_by_road_type.png")
 
-    print("Visualizations complete — 6 PNG charts saved")
+    # FIX: print actual count of saved charts, not hardcoded 6
+    print(f"Visualizations complete — {len(charts_saved)} PNG charts saved:")
+    for name in charts_saved:
+        print(f"  Saved: {name}")
     print("For HTML maps run: python crash_frequency_map.py")

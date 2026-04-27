@@ -42,7 +42,7 @@ CHECKPOINT_FILE = "crashes_checkpoint.csv"
 def load_data():
     """
     Load crash CSV with manually defined column names.
-    Remove nrows=500 when ready for the full overnight run.
+    Remove nrows=1000 when ready for the full overnight run.
     """
     cols = [
         'ID', 'Crash ID', 'crash_fatal_fl', 'case_id', 'rpt_block_num',
@@ -69,7 +69,7 @@ def load_data():
         header=0,
         names=cols,
         low_memory=False,
-        nrows=700         # Remove this line for the full overnight run
+        nrows=1000         # ← Remove this line for the full 90k overnight run
     )
     df.columns = df.columns.str.strip()
     df = df.reset_index(drop=True)
@@ -127,44 +127,68 @@ def enrich_data(df):
     """
 
     # ── Checkpoint Recovery ───────────────────────────────────
+    # FIX: Pre-populate lists from checkpoint so lengths always
+    # match df when attaching columns at the end of the loop.
     if os.path.exists(CHECKPOINT_FILE):
         print(f"\n  Checkpoint found — resuming from saved progress...")
         checkpoint_df   = pd.read_csv(CHECKPOINT_FILE)
         processed_count = len(checkpoint_df)
-        print(f"  Skipping first {processed_count} rows\n")
+        print(f"  Resuming from row {processed_count}\n")
+
+        highways             = checkpoint_df.get("Highway_Type",        pd.Series()).tolist()
+        highway_labels       = checkpoint_df.get("Road_Type_Label",     pd.Series()).tolist()
+        road_names           = checkpoint_df.get("Road_Name",           pd.Series()).tolist()
+        lanes_list           = checkpoint_df.get("Num_Lanes",           pd.Series()).tolist()
+        speed_limits         = checkpoint_df.get("Speed_Limit",         pd.Series()).tolist()
+        road_risks           = checkpoint_df.get("Road_Risk_Level",     pd.Series()).tolist()
+        is_intersections     = checkpoint_df.get("Is_Intersection",     pd.Series()).tolist()
+        intersection_degrees = checkpoint_df.get("Intersection_Degree", pd.Series()).tolist()
+        curvatures           = checkpoint_df.get("Road_Curvature",      pd.Series()).tolist()
+        lit_values           = checkpoint_df.get("Street_Lit",          pd.Series()).tolist()
+        aadt_values          = checkpoint_df.get("AADT",                pd.Series()).tolist()
+        aadt_roads           = checkpoint_df.get("AADT_Station_Road",   pd.Series()).tolist()
+        aadt_distances       = checkpoint_df.get("AADT_Distance_km",    pd.Series()).tolist()
+        aadt_sources         = checkpoint_df.get("AADT_Source",         pd.Series()).tolist()
+        temps                = checkpoint_df.get("Temperature",         pd.Series()).tolist()
+        precips              = checkpoint_df.get("Precipitation",       pd.Series()).tolist()
+        windspeeds           = checkpoint_df.get("Windspeed",           pd.Series()).tolist()
+        visibilities         = checkpoint_df.get("Visibility",          pd.Series()).tolist()
+        weathercodes         = checkpoint_df.get("Weather_Code",        pd.Series()).tolist()
+        is_wet_list          = checkpoint_df.get("is_wet",              pd.Series()).tolist()
+        zone_categories      = checkpoint_df.get("Zone_Category",       pd.Series()).tolist()
+        zone_types           = checkpoint_df.get("Zone_Type",           pd.Series()).tolist()
+        dist_schools         = checkpoint_df.get("Dist_To_School",      pd.Series()).tolist()
+        near_schools         = checkpoint_df.get("Near_School",         pd.Series()).tolist()
+        dist_bus_stops       = checkpoint_df.get("Dist_To_Bus_Stop",    pd.Series()).tolist()
+        near_bus_stops       = checkpoint_df.get("Near_Bus_Stop",       pd.Series()).tolist()
     else:
-        processed_count = 0
-
-    # ── Output lists ─────────────────────────────────────────
-    highways             = []
-    highway_labels       = []
-    road_names           = []
-    lanes_list           = []
-    speed_limits         = []
-    road_risks           = []
-    is_intersections     = []
-    intersection_degrees = []
-    curvatures           = []
-    lit_values           = []
-
-    aadt_values    = []
-    aadt_roads     = []
-    aadt_distances = []
-    aadt_sources   = []
-
-    temps        = []
-    precips      = []
-    windspeeds   = []
-    visibilities = []
-    weathercodes = []
-    is_wet_list  = []
-
-    zone_categories = []
-    zone_types      = []
-    dist_schools    = []
-    near_schools    = []
-    dist_bus_stops  = []
-    near_bus_stops  = []
+        processed_count      = 0
+        highways             = []
+        highway_labels       = []
+        road_names           = []
+        lanes_list           = []
+        speed_limits         = []
+        road_risks           = []
+        is_intersections     = []
+        intersection_degrees = []
+        curvatures           = []
+        lit_values           = []
+        aadt_values          = []
+        aadt_roads           = []
+        aadt_distances       = []
+        aadt_sources         = []
+        temps                = []
+        precips              = []
+        windspeeds           = []
+        visibilities         = []
+        weathercodes         = []
+        is_wet_list          = []
+        zone_categories      = []
+        zone_types           = []
+        dist_schools         = []
+        near_schools         = []
+        dist_bus_stops       = []
+        near_bus_stops       = []
 
     total = len(df)
 
@@ -224,8 +248,7 @@ def enrich_data(df):
         highways.append(highway)
         highway_labels.append(highway_label)
 
-        # If OSMnx road_name is None (trail was cleared)
-        # fall back to the crash report street address
+        # If OSMnx road_name is None fall back to crash report address
         if road_name is None:
             block  = str(row.get("rpt_block_num",   "") or "").strip()
             street = str(row.get("rpt_street_name", "") or "").strip()
@@ -506,3 +529,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

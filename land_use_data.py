@@ -36,6 +36,12 @@
 #   1. Download Zoning By Address CSV → save as austin_zoning.csv
 #   2. Rename stops.txt from CapMetro GTFS → capmetro_stops
 #   Both files go in your project folder (crash_ml_project/)
+#
+# FIXES:
+#   - Partial zoning match now uses a pre-built suffix index
+#     instead of looping through entire dictionary on each call
+#     (prevents severe slowdown on 90k row full run)
+#   - verify_data() now called automatically at module load
 # ============================================================
 
 import pandas as pd
@@ -44,12 +50,9 @@ import os
 from sklearn.neighbors import BallTree
 
 # ── File paths ────────────────────────────────────────────────
-# All files must be CSV format in your project folder
-ZONING_FILE    = "austin_zoning.csv"      # Manual download required
-BUS_STOPS_FILE = "capmetro_stops.csv"     # Renamed from stops.txt → .csv
-SCHOOLS_FILE   = "austin_schools.csv"     # Your local schools file
-                                          # Change this name to match
-                                          # whatever you saved it as
+ZONING_FILE    = "austin_zoning.csv"
+BUS_STOPS_FILE = "capmetro_stops.csv"
+SCHOOLS_FILE   = "austin_schools.csv"
 
 # ── Proximity thresholds ──────────────────────────────────────
 SCHOOL_PROXIMITY_M   = 300   # 300m ≈ 3 city blocks
@@ -69,6 +72,9 @@ def simplify_zone(zone_code):
         CS / GR / GO / LR  = Commercial
         LI / MI / W/        = Industrial
         MU / CR / TOD / VMU = Mixed Use
+        NO                  = Neighborhood Office (mapped to Mixed Use
+                              as it serves as a transition zone between
+                              residential and commercial areas)
         P / DR / AG         = Civic / Public
     """
     if not zone_code or pd.isna(zone_code):
@@ -93,10 +99,11 @@ def _load_zoning():
     """
     Load Austin Zoning By Address dataset.
 
-    This dataset uses street addresses not coordinates so we
-    cannot build a BallTree from it directly. Instead we build
-    a lookup dictionary keyed on street name so we can match
-    crash report addresses to zone codes quickly.
+    Builds two lookup dictionaries for fast zone matching:
+      1. _zoning_lookup  — keyed on full street name (exact match)
+      2. _zoning_suffix  — keyed on street name without block number
+                           (partial match, pre-built to avoid O(n)
+                           scan on every crash row lookup)
 
     Confirmed columns:
         FULL_STREET_NAME  — e.g. "6021 CERVINUS RUN"
@@ -110,42 +117,44 @@ def _load_zoning():
         print(f"  1. Go to: https://data.austintexas.gov/Building-and-Development/Zoning-By-Address/nbzi-qabm")
         print(f"  2. Click Export → Download as CSV")
         print(f"  3. Save as '{ZONING_FILE}' in your project folder")
-        return pd.DataFrame(), {}
+        return pd.DataFrame(), {}, {}
 
     print(f"  Zoning: Loading from {ZONING_FILE}...")
     df = pd.read_csv(ZONING_FILE, low_memory=False)
 
-    # Confirm expected columns exist
     required = ["FULL_STREET_NAME", "ZONING_ZTYPE", "BASE_ZONE_CATEGORY"]
     missing  = [c for c in required if c not in df.columns]
     if missing:
         print(f"  Zoning: Missing expected columns: {missing}")
         print(f"  Available columns: {df.columns.tolist()}")
-        return pd.DataFrame(), {}
+        return pd.DataFrame(), {}, {}
 
-    # Build street name lookup dict
-    # Key = uppercase street name, Value = (zone_type, zone_category)
-    lookup = {}
+    # Build exact match lookup and suffix lookup simultaneously
+    lookup = {}   # full street name → (zone_type, zone_category)
+    suffix = {}   # street name without block number → (zone_type, zone_category)
+
     for _, row in df.iterrows():
         street = str(row.get("FULL_STREET_NAME", "") or "").strip().upper()
         ztype  = str(row.get("ZONING_ZTYPE", "Unknown") or "Unknown")
-        zcat   = str(row.get("BASE_ZONE_CATEGORY", "Unknown") or "Unknown")
-        if street:
-            lookup[street] = (ztype, simplify_zone(ztype))
+        if not street:
+            continue
+        val = (ztype, simplify_zone(ztype))
+        lookup[street] = val
+
+        # Pre-build suffix index: strip leading block number if present
+        parts = street.split()
+        if len(parts) > 1 and parts[0].isdigit():
+            street_without_block = " ".join(parts[1:])
+            if street_without_block not in suffix:
+                suffix[street_without_block] = val
 
     print(f"  Zoning: {len(df):,} records loaded, "
           f"{len(lookup):,} unique streets indexed")
-    return df, lookup
+    return df, lookup, suffix
 
 
 # ── Schools Loader ────────────────────────────────────────────
 def _load_schools():
-    """
-    Load Austin school locations from your local CSV file.
-    No API download needed — uses the file you already have.
-
-    If your file has a different name change SCHOOLS_FILE above.
-    """
     if not os.path.exists(SCHOOLS_FILE):
         print(f"  Schools: '{SCHOOLS_FILE}' not found.")
         print(f"  Rename your schools CSV to '{SCHOOLS_FILE}' "
@@ -159,7 +168,6 @@ def _load_schools():
         print(f"  Schools: Failed to load — {e}")
         return pd.DataFrame()
 
-    # Find lat/lon columns — handles different column name formats
     lat_col = lon_col = None
     for col in df.columns:
         cl = col.lower()
@@ -188,19 +196,6 @@ def _load_schools():
 
 # ── Bus Stops Loader ──────────────────────────────────────────
 def _load_bus_stops():
-    """
-    Load CapMetro bus stop locations from GTFS stops file.
-
-    Confirmed columns from stops.txt:
-        stop_id, stop_name, stop_lat, stop_lon,
-        at_street, on_street, heading, stop_code,
-        stop_desc, location_type, parent_station,
-        stop_position, stop_timezone, stop_url,
-        wheelchair_boarding, zone_id
-
-    The file was renamed from stops.txt to capmetro_stops.
-    Place it in your project folder before running.
-    """
     if not os.path.exists(BUS_STOPS_FILE):
         print(f"  Bus Stops: '{BUS_STOPS_FILE}' not found.")
         print(f"  To get it:")
@@ -219,7 +214,6 @@ def _load_bus_stops():
         print(f"  Bus Stops: Failed to load — {e}")
         return pd.DataFrame()
 
-    # Confirm expected columns
     if "stop_lat" not in df.columns or "stop_lon" not in df.columns:
         print(f"  Bus Stops: Missing stop_lat/stop_lon columns.")
         print(f"  Columns found: {df.columns.tolist()}")
@@ -229,8 +223,6 @@ def _load_bus_stops():
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
     df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
     df = df.dropna(subset=["lat", "lon"])
-
-    # Filter to Austin area only
     df = df[
         df["lat"].between(30.0, 30.7) &
         df["lon"].between(-98.1, -97.4)
@@ -242,7 +234,6 @@ def _load_bus_stops():
 
 # ── BallTree Builder ──────────────────────────────────────────
 def _build_tree(df):
-    """Build a BallTree spatial index for fast nearest-neighbor search."""
     if df.empty or len(df) < 1:
         return None
     coords = np.radians(df[["lat", "lon"]].values)
@@ -252,7 +243,7 @@ def _build_tree(df):
 # ── Module-level Load ─────────────────────────────────────────
 print("Loading land use data...")
 
-_zoning_df, _zoning_lookup = _load_zoning()
+_zoning_df, _zoning_lookup, _zoning_suffix = _load_zoning()
 _schools_df   = _load_schools()
 _bus_stops_df = _load_bus_stops()
 
@@ -268,31 +259,39 @@ def _lookup_zone(road_name, crash_address=None):
     Look up zone type for a crash location using road name.
     Tries crash road name first then falls back to crash address.
 
+    FIX: Partial match now uses pre-built _zoning_suffix index
+    instead of scanning entire dictionary (O(1) vs O(n)).
+
     Returns (zone_type, zone_category) or ('Unknown', 'Unknown')
     """
     if not _zoning_lookup:
         return "Unknown", "Unknown"
 
-    # Try road name first
+    # Try road name first — exact match
     if road_name and pd.notna(road_name):
         key = str(road_name).strip().upper()
         if key in _zoning_lookup:
             return _zoning_lookup[key]
-        # Try partial match — street name without block number
-        parts = key.split()
-        if len(parts) > 1:
-            # Remove leading block number if present
-            if parts[0].isdigit():
-                partial = " ".join(parts[1:])
-                for k, v in _zoning_lookup.items():
-                    if partial in k:
-                        return v
 
-    # Try crash address fallback
+        # Try suffix index (street name without block number)
+        parts = key.split()
+        if len(parts) > 1 and parts[0].isdigit():
+            street_without_block = " ".join(parts[1:])
+            if street_without_block in _zoning_suffix:
+                return _zoning_suffix[street_without_block]
+
+    # Try crash address fallback — exact match
     if crash_address and pd.notna(crash_address):
         key = str(crash_address).strip().upper()
         if key in _zoning_lookup:
             return _zoning_lookup[key]
+
+        # Try suffix index on address too
+        parts = key.split()
+        if len(parts) > 1 and parts[0].isdigit():
+            street_without_block = " ".join(parts[1:])
+            if street_without_block in _zoning_suffix:
+                return _zoning_suffix[street_without_block]
 
     return "Unknown", "Unknown"
 
@@ -356,9 +355,9 @@ def get_land_use(lat, lon, road_name=None, crash_address=None):
     )
 
 
-# ── Row-wise Wrapper ──────────────────────────────────────────
+# ── Row-wise Wrapper (unused — kept for Phase 2 df.apply use) ─
 def process_land_use(row):
-    """Row-wise wrapper for use with df.apply()"""
+    """Row-wise wrapper for use with df.apply() in Phase 2"""
     (zone_cat, zone_typ,
      dist_sch, near_sch,
      dist_bus, near_bus) = get_land_use(
@@ -401,3 +400,7 @@ def verify_data():
         print(f"\n  Missing files: {missing}")
         print("  See instructions at top of land_use_data.py")
     print("───────────────────────────────────────────────────\n")
+
+
+# Call verify automatically so you always see the summary on load
+verify_data()
