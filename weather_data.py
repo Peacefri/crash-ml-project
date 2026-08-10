@@ -14,8 +14,10 @@
 import requests
 import json
 import os
+import atexit
 
-WEATHER_CACHE_FILE = "weather_cache.json"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+WEATHER_CACHE_FILE = os.path.join(PROJECT_DIR, "weather_cache.json")
 _cache_write_count = 0   # Track how many new entries added this session
 
 # Load persistent cache from disk if it exists
@@ -31,6 +33,9 @@ def save_cache():
     """Save in-memory cache to disk so it persists across runs."""
     with open(WEATHER_CACHE_FILE, "w") as f:
         json.dump(weather_cache, f)
+
+
+atexit.register(save_cache)
 
 
 def get_weather(lat, lon, date, hour):

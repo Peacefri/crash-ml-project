@@ -49,6 +49,7 @@
 import pandas as pd
 import numpy as np
 import os
+import re
 from sklearn.neighbors import BallTree
 
 # ── File paths ────────────────────────────────────────────────
@@ -97,6 +98,21 @@ def simplify_zone(zone_code):
         return "Other"
 
 
+def _normalize_street(value):
+    """Normalize street direction and suffix variants for zoning lookup."""
+    value = re.sub(r"[^A-Z0-9 ]+", " ", str(value).upper())
+    value = re.sub(r"\s+", " ", value).strip()
+    directions = {"N", "S", "E", "W", "NB", "SB", "EB", "WB",
+                  "NORTH", "SOUTH", "EAST", "WEST"}
+    suffixes = {
+        "STREET": "ST", "AVENUE": "AVE", "ROAD": "RD", "DRIVE": "DR",
+        "BOULEVARD": "BLVD", "HIGHWAY": "HWY", "PARKWAY": "PKWY",
+        "LANE": "LN", "COURT": "CT", "CIRCLE": "CIR", "TRAIL": "TRL"
+    }
+    return " ".join(suffixes.get(word, word) for word in value.split()
+                     if word not in directions)
+
+
 # ── Zoning Loader ─────────────────────────────────────────────
 def _load_zoning():
     """
@@ -132,6 +148,7 @@ def _load_zoning():
     # Build exact match lookup and suffix lookup simultaneously
     lookup = {}   # full street name → (zone_type, zone_category)
     suffix = {}   # street name without block number → (zone_type, zone_category)
+    normalized_suffix = {}
 
     for _, row in df.iterrows():
         street = str(row.get("FULL_STREET_NAME", "") or "").strip().upper()
@@ -147,10 +164,13 @@ def _load_zoning():
             street_without_block = " ".join(parts[1:])
             if street_without_block not in suffix:
                 suffix[street_without_block] = val
+            normalized_suffix.setdefault(
+                _normalize_street(street_without_block), val
+            )
 
     print(f"  Zoning: {len(df):,} records loaded, "
           f"{len(lookup):,} unique streets indexed")
-    return df, lookup, suffix
+    return df, lookup, {**suffix, "__normalized__": normalized_suffix}
 
 
 # ── Schools Loader ────────────────────────────────────────────
@@ -260,31 +280,25 @@ def _lookup_zone(road_name, crash_address=None):
     if not _zoning_lookup:
         return "Unknown", "Unknown"
 
-    # Try road name first — exact match
-    if road_name and pd.notna(road_name):
-        key = str(road_name).strip().upper()
+    normalized_suffix = _zoning_suffix.get("__normalized__", {})
+    candidates = []
+    for value in (road_name, crash_address):
+        if value and pd.notna(value):
+            candidates.extend(re.split(r"\s*&\s*", str(value)))
+
+    for candidate in candidates:
+        key = candidate.strip().upper()
         if key in _zoning_lookup:
             return _zoning_lookup[key]
 
-        # Try suffix index (street name without block number)
         parts = key.split()
-        if len(parts) > 1 and parts[0].isdigit():
-            street_without_block = " ".join(parts[1:])
-            if street_without_block in _zoning_suffix:
-                return _zoning_suffix[street_without_block]
+        street_without_block = " ".join(parts[1:]) if parts and parts[0].isdigit() else key
+        if street_without_block in _zoning_suffix:
+            return _zoning_suffix[street_without_block]
 
-    # Try crash address fallback — exact match
-    if crash_address and pd.notna(crash_address):
-        key = str(crash_address).strip().upper()
-        if key in _zoning_lookup:
-            return _zoning_lookup[key]
-
-        # Try suffix index on address too
-        parts = key.split()
-        if len(parts) > 1 and parts[0].isdigit():
-            street_without_block = " ".join(parts[1:])
-            if street_without_block in _zoning_suffix:
-                return _zoning_suffix[street_without_block]
+        normalized = normalized_suffix.get(_normalize_street(street_without_block))
+        if normalized:
+            return normalized
 
     return "Unknown", "Unknown"
 
@@ -372,7 +386,7 @@ def process_land_use(row):
 # ── Verification ──────────────────────────────────────────────
 def verify_data():
     """Print a summary of what was loaded successfully."""
-    print("\n── Land Use Data Summary ──────────────────────────")
+    print("\n-- Land Use Data Summary --------------------------")
     print(f"  Zoning streets indexed : {len(_zoning_lookup):,}")
     print(f"  School locations       : {len(_schools_df):,}")
     print(f"  Bus stop locations     : {len(_bus_stops_df):,}")
@@ -392,7 +406,7 @@ def verify_data():
     if missing:
         print(f"\n  Missing files: {missing}")
         print("  Run: python fetch_data.py")
-    print("───────────────────────────────────────────────────\n")
+    print("---------------------------------------------------\n")
 
 
 # Call verify automatically so you always see the summary on load

@@ -27,6 +27,7 @@ import pandas as pd
 import numpy as np
 import os
 import pickle
+import re
 from sklearn.neighbors import BallTree
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -160,32 +161,43 @@ def roads_match(crash_road, station_road):
     if not crash_road or not station_road:
         return False
 
-    crash_road   = str(crash_road).strip().upper()
-    station_road = str(station_road).strip().upper()
+    crash_road   = _normalize_road_name(crash_road)
+    station_road = _normalize_road_name(station_road)
 
     if not crash_road or not station_road:
         return False
 
-    # Direct match
-    if crash_road == station_road:
-        return True
+    return crash_road == station_road
 
-    # Partial match — one name contains the other
-    if crash_road in station_road or station_road in crash_road:
-        return True
 
-    # Check if key words match (ignores directional prefixes N/S/E/W)
-    crash_words   = set(crash_road.split())
-    station_words = set(station_road.split())
-    prefixes      = {"N", "S", "E", "W", "NB", "SB", "EB", "WB",
-                     "NORTH", "SOUTH", "EAST", "WEST"}
-    crash_core    = crash_words - prefixes
-    station_core  = station_words - prefixes
+def _normalize_road_name(road_name):
+    """Normalize route aliases and street formatting for safe equality checks."""
+    value = re.sub(r"[^A-Z0-9 ]+", " ", str(road_name).upper())
+    value = re.sub(r"\s+", " ", value).strip()
 
-    if crash_core and station_core and crash_core & station_core:
-        return True
+    # TxDOT route IDs use zero-padded numbers; crash/OSM names do not.
+    route_pattern = r"\b(IH|INTERSTATE|US|SH|FM|RM|SL|TX|TL)\s*0*(\d+)\b"
+    route_prefixes = {
+        "IH": "IH", "INTERSTATE": "IH", "I": "IH", "US": "US", "SH": "SH",
+        "FM": "FM", "RM": "RM", "SL": "SL", "TX": "TX", "TL": "TL"
+    }
 
-    return False
+    def route_replacement(match):
+        return f"{route_prefixes[match.group(1)]}{int(match.group(2))}"
+
+    value = re.sub(route_pattern, route_replacement, value)
+    value = re.sub(r"\bLOOP\s*0*(\d+)\b", lambda m: f"SL{int(m.group(1))}", value)
+
+    words = value.split()
+    directional = {"N", "S", "E", "W", "NB", "SB", "EB", "WB",
+                   "NORTH", "SOUTH", "EAST", "WEST"}
+    suffixes = {
+        "STREET": "ST", "AVENUE": "AVE", "ROAD": "RD", "DRIVE": "DR",
+        "BOULEVARD": "BLVD", "HIGHWAY": "HWY", "PARKWAY": "PKWY",
+        "LANE": "LN", "COURT": "CT", "CIRCLE": "CIR", "TRAIL": "TRL"
+    }
+    words = [suffixes.get(word, word) for word in words if word not in directional]
+    return " ".join(words)
 
 
 # ── Main AADT Lookup Function ────────────────────────────────
@@ -225,8 +237,8 @@ def get_aadt(lat, lon, crash_year, road_name=None,
         try:
             point_rad = np.radians([[lat, lon]])
 
-            # Get 5 nearest stations to find best road name match
-            k         = min(5, len(_aadt_df))
+            # Search enough nearby stations to find a matching route segment.
+            k         = min(25, len(_aadt_df))
             dist_rad, idx = _tree.query(point_rad, k=k)
 
             for i in range(k):

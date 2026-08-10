@@ -24,7 +24,8 @@ import os
 import pickle
 import math
 
-GRAPH_CACHE_FILE = "austin_road_network.pkl"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+GRAPH_CACHE_FILE = os.path.join(PROJECT_DIR, "austin_road_network.pkl")
 
 
 # ── Friendly road type labels for visualizations ─────────────
@@ -106,18 +107,22 @@ def load_graph():
         print("Road network loaded from cache.")
     else:
         print("Downloading Austin road network (first time only)...")
-        G = ox.graph_from_place(
-            "Austin, Texas, USA",
-            network_type="drive"
-        )
-        with open(GRAPH_CACHE_FILE, "wb") as f:
-            pickle.dump(G, f)
-        print("Road network downloaded and cached locally.")
+        try:
+            G = ox.graph_from_place(
+                "Austin, Texas, USA",
+                network_type="drive"
+            )
+            with open(GRAPH_CACHE_FILE, "wb") as f:
+                pickle.dump(G, f)
+            print("Road network downloaded and cached locally.")
+        except Exception as e:
+            print(f"Road network unavailable: {e}")
+            return None
     return G
 
 
-# Load once when module is imported
-G = load_graph()
+# Load on first road lookup so startup can report network failures cleanly.
+G = None
 
 
 # ── Curvature Calculation ────────────────────────────────────
@@ -206,6 +211,12 @@ def get_road_type(lat, lon):
         [9] lit                 - 'yes', 'no', or None (OSMnx lit tag)
     """
     try:
+        global G
+        if G is None:
+            G = load_graph()
+        if G is None:
+            raise RuntimeError("Austin road network is unavailable")
+
         # Find nearest edge
         u, v, key = ox.distance.nearest_edges(G, X=lon, Y=lat)
         edge_data = G.edges[u, v, key]

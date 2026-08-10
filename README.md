@@ -10,9 +10,10 @@ Austin crash enrichment pipeline combining four external data integrations:
 ## Run
 
 1. Install dependencies: `.venv/Scripts/python.exe -m pip install -r requirements.txt`
-2. Put the input crash file in the project folder. The default is `crashes_with_weather.csv`; override it with `CRASH_INPUT_FILE`.
-3. Download the external datasets: `.venv/Scripts/python.exe fetch_data.py`. This writes `txdot_aadt.csv`, `austin_zoning.csv`, `austin_schools.csv`, and `capmetro_stops.csv`. They are gitignored because of their size, so a fresh clone has none of them — this step is what puts them back. Missing local files are reported and do not prevent weather or road-type fallback processing.
-4. Run: `.venv/Scripts/python.exe main.py`
+2. Download the datasets: `.venv/Scripts/python.exe fetch_data.py`. This writes `crashes_raw.csv`, `txdot_aadt.csv`, `austin_zoning.csv`, `austin_schools.csv`, and `capmetro_stops.csv`. They are gitignored, so a fresh clone has none of them — this step is what puts them back. Missing local files are reported and do not prevent weather or road-type fallback processing.
+3. Run: `.venv/Scripts/python.exe main.py`
+
+`crashes_raw.csv` holds the crash records the pipeline enriches. By default `fetch_data.py` pulls the **oldest 100** geocoded crashes for a reproducible test. To refresh with current records, run `.venv/Scripts/python.exe fetch_data.py --force --latest --crashes 100`, then run `.venv/Scripts/python.exe main.py`. Pull more with `--crashes N`, or point `CRASH_INPUT_FILE` at a different file. Rows without coordinates or a timestamp are filtered out at fetch time, since every enrichment stage is keyed off them.
 
 The output is `crashes_final_enriched.csv`. Each integration writes source/proximity fields so coverage can be audited, especially `AADT_Source`, `Weather_Code`, `Road_Type_Label`, `Zone_Category`, `Near_School`, and `Near_Bus_Stop`.
 
@@ -24,6 +25,7 @@ Before a full run, verify that the crash input contains latitude, longitude, cra
 
 | File | Source | Notes |
 | --- | --- | --- |
+| `crashes_raw.csv` | [Austin Crash Report Data - Crash Level Records, dataset `y2wy-tgr5`](https://data.austintexas.gov/Transportation-and-Mobility/Austin-Crash-Report-Data-Crash-Level-Records/y2wy-tgr5/about_data) | ~230k geocoded crashes available; oldest 100 fetched by default |
 | `txdot_aadt.csv` | [TxDOT AADT Annuals (Public View)](https://gis-txdot.opendata.arcgis.com/datasets/txdot-aadt-annuals) | 1,585 active Austin-metro stations, 19 years of history |
 | `austin_zoning.csv` | [Zoning By Address, dataset `nbzi-qabm`](https://data.austintexas.gov/Building-and-Development/Zoning-By-Address/nbzi-qabm) | ~263k addresses, ~22 MB |
 | `austin_schools.csv` | [NCES Public School Locations - Current](https://data-nces.opendata.arcgis.com/) | 649 schools in the five Austin-metro counties |
