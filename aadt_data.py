@@ -10,6 +10,17 @@
 # FIX: Distance check now uses `continue` instead of `break`
 # so all 5 candidate stations are checked even if the nearest
 # one is beyond the search radius.
+#
+# Data source — TxDOT AADT Annuals (Public View), Austin metro:
+#   https://services.arcgis.com/KTcxiTD9dsQw4r7Z/arcgis/rest/
+#           services/TxDOT_AADT_Annuals_(Public_View)/FeatureServer/0
+# Downloaded to txdot_aadt.csv by fetch_data.py, which is
+# gitignored — run fetch_data.py once before main.py.
+#
+# NOTE on ON_ROAD: state highways carry route codes ("IH0035",
+# "US0183"), city streets carry names ("AIRPORT BLVD"). Crash road
+# names from OSMnx only ever match the latter, so highway crashes
+# fall through to the road-type estimate. See roads_match().
 # ============================================================
 
 import pandas as pd
@@ -18,8 +29,9 @@ import os
 import pickle
 from sklearn.neighbors import BallTree
 
-AADT_FILE  = "txdot_aadt.csv"
-CACHE_FILE = "aadt_cache.pkl"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+AADT_FILE  = os.environ.get("AADT_FILE", os.path.join(PROJECT_DIR, "txdot_aadt.csv"))
+CACHE_FILE = os.path.join(PROJECT_DIR, "aadt_cache.pkl")
 
 # Austin metro counties
 AUSTIN_COUNTIES = [
@@ -60,6 +72,10 @@ def load_aadt_data():
         print("Loading AADT data from cache...")
         with open(CACHE_FILE, "rb") as f:
             return pickle.load(f)
+
+    if not os.path.exists(AADT_FILE):
+        print(f"AADT: {AADT_FILE} not found; station matching is unavailable.")
+        return {"aadt": pd.DataFrame(), "tree": None}
 
     print("Loading TxDOT AADT dataset...")
     df = pd.read_csv(AADT_FILE)
@@ -205,37 +221,36 @@ def get_aadt(lat, lon, crash_year, road_name=None,
     """
 
     # ── Step 1: Station matching with road name verification ──
-    try:
-        point_rad = np.radians([[lat, lon]])
+    if _tree is not None and not _aadt_df.empty:
+        try:
+            point_rad = np.radians([[lat, lon]])
 
-        # Get 5 nearest stations to find best road name match
-        k         = min(5, len(_aadt_df))
-        dist_rad, idx = _tree.query(point_rad, k=k)
+            # Get 5 nearest stations to find best road name match
+            k         = min(5, len(_aadt_df))
+            dist_rad, idx = _tree.query(point_rad, k=k)
 
-        for i in range(k):
-            dist_km = dist_rad[0][i] * 6371  # radians to km
+            for i in range(k):
+                dist_km = dist_rad[0][i] * 6371  # radians to km
 
-            # FIX: use continue not break — check all 5 stations
-            # even if one is beyond the radius, others may still match
-            if dist_km > max_distance_km:
-                continue
+                # Check all candidates even if the nearest is too far away.
+                if dist_km > max_distance_km:
+                    continue
 
-            station      = _aadt_df.iloc[idx[0][i]]
-            station_road = station.get("ON_ROAD_UPPER", "")
+                station      = _aadt_df.iloc[idx[0][i]]
+                station_road = station.get("ON_ROAD_UPPER", "")
 
-            # Only accept if road names match
-            if roads_match(road_name, station_road):
-                aadt_value = get_historical_aadt(station, crash_year)
-                return (
-                    float(aadt_value),
-                    station_road,
-                    round(dist_km, 3),
-                    "station",
-                    None
-                )
+                if roads_match(road_name, station_road):
+                    aadt_value = get_historical_aadt(station, crash_year)
+                    return (
+                        float(aadt_value),
+                        station_road,
+                        round(dist_km, 3),
+                        "station",
+                        None
+                    )
 
-    except Exception as e:
-        print(f"  AADT station lookup failed for ({lat}, {lon}): {e}")
+        except Exception as e:
+            print(f"  AADT station lookup failed for ({lat}, {lon}): {e}")
 
     # ── Step 2: Road type fallback ────────────────────────────
     if highway_type and highway_type in ROAD_TYPE_AADT:

@@ -224,6 +224,9 @@ capmetro_stops.csv
 # Temporary files
 run_log.txt
 
+# Stray Git for Windows installation copied into the project folder
+Git/
+
 # Python compiled files
 __pycache__/
 *.pyc

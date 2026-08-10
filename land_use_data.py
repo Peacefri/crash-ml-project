@@ -21,21 +21,23 @@
 #     Download: austin_zoning.csv (manual download required)
 #
 #   Schools:
-#     https://data.austintexas.gov/Health-and-Community-Services/
-#             City-of-Austin-Schools-with-Data/63ig-4knr
-#     Download via Socrata API automatically
+#     NCES Public School Locations - Current, filtered to the five
+#     Austin metro counties. Columns used: LAT, LON.
+#     https://services1.arcgis.com/Ua5sjt3LWTPigjyD/arcgis/rest/
+#             services/Public_School_Locations_Current/FeatureServer/0
+#     NOTE: the City of Austin "Schools with Data" set (63ig-4knr)
+#     was the original source here, but it publishes no coordinate
+#     columns, so it cannot drive a distance calculation. NCES
+#     covers public and charter schools; private schools are absent.
 #
-#   Bus Stops (CapMetro GTFS stops.txt renamed):
-#     capmetro_stops (renamed from stops.txt in CapMetro GTFS zip)
+#   Bus Stops (CapMetro GTFS stops.txt):
 #     Columns: stop_id, stop_name, stop_lat, stop_lon
-#     Download manually from:
-#     https://data.texas.gov/browse?Dataset-Category_Agency=
-#     Capital+Metropolitan+Transportation+Authority
+#     https://data.texas.gov/dataset/CapMetro-GTFS/r4v4-vz24
 #
-# IMPORTANT — manual downloads required before first run:
-#   1. Download Zoning By Address CSV → save as austin_zoning.csv
-#   2. Rename stops.txt from CapMetro GTFS → capmetro_stops
-#   Both files go in your project folder (crash_ml_project/)
+# All three files are downloaded by fetch_data.py — run it once
+# before main.py. They are gitignored, so a fresh clone has none
+# of them:
+#     .venv/Scripts/python.exe fetch_data.py
 #
 # FIXES:
 #   - Partial zoning match now uses a pre-built suffix index
@@ -50,9 +52,10 @@ import os
 from sklearn.neighbors import BallTree
 
 # ── File paths ────────────────────────────────────────────────
-ZONING_FILE    = "austin_zoning.csv"
-BUS_STOPS_FILE = "capmetro_stops.csv"
-SCHOOLS_FILE   = "austin_schools.csv"
+PROJECT_DIR    = os.path.dirname(os.path.abspath(__file__))
+ZONING_FILE    = os.path.join(PROJECT_DIR, "austin_zoning.csv")
+BUS_STOPS_FILE = os.path.join(PROJECT_DIR, "capmetro_stops.csv")
+SCHOOLS_FILE   = os.path.join(PROJECT_DIR, "austin_schools.csv")
 
 # ── Proximity thresholds ──────────────────────────────────────
 SCHOOL_PROXIMITY_M   = 300   # 300m ≈ 3 city blocks
@@ -113,10 +116,7 @@ def _load_zoning():
     """
     if not os.path.exists(ZONING_FILE):
         print(f"  Zoning: {ZONING_FILE} not found in project folder.")
-        print(f"  To get it:")
-        print(f"  1. Go to: https://data.austintexas.gov/Building-and-Development/Zoning-By-Address/nbzi-qabm")
-        print(f"  2. Click Export → Download as CSV")
-        print(f"  3. Save as '{ZONING_FILE}' in your project folder")
+        print(f"  Run: python fetch_data.py --only austin_zoning.csv")
         return pd.DataFrame(), {}, {}
 
     print(f"  Zoning: Loading from {ZONING_FILE}...")
@@ -157,8 +157,7 @@ def _load_zoning():
 def _load_schools():
     if not os.path.exists(SCHOOLS_FILE):
         print(f"  Schools: '{SCHOOLS_FILE}' not found.")
-        print(f"  Rename your schools CSV to '{SCHOOLS_FILE}' "
-              f"and place it in your project folder.")
+        print(f"  Run: python fetch_data.py --only austin_schools.csv")
         return pd.DataFrame()
 
     print(f"  Schools: Loading from {SCHOOLS_FILE}...")
@@ -198,13 +197,7 @@ def _load_schools():
 def _load_bus_stops():
     if not os.path.exists(BUS_STOPS_FILE):
         print(f"  Bus Stops: '{BUS_STOPS_FILE}' not found.")
-        print(f"  To get it:")
-        print(f"  1. Go to: https://data.texas.gov/browse?"
-              f"Dataset-Category_Agency=Capital+Metropolitan"
-              f"+Transportation+Authority")
-        print(f"  2. Download the CapMetro GTFS zip file")
-        print(f"  3. Unzip it and rename stops.txt → capmetro_stops")
-        print(f"  4. Move capmetro_stops into your project folder")
+        print(f"  Run: python fetch_data.py --only capmetro_stops.csv")
         return pd.DataFrame()
 
     print(f"  Bus Stops: Loading from {BUS_STOPS_FILE}...")
@@ -398,7 +391,7 @@ def verify_data():
         missing.append("capmetro_stops")
     if missing:
         print(f"\n  Missing files: {missing}")
-        print("  See instructions at top of land_use_data.py")
+        print("  Run: python fetch_data.py")
     print("───────────────────────────────────────────────────\n")
 
 
