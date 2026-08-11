@@ -23,13 +23,22 @@ Before a full run, verify that the crash input contains latitude, longitude, cra
 
 ## Data sources
 
-| File | Source | Notes |
-| --- | --- | --- |
-| `crashes_raw.csv` | [Austin Crash Report Data - Crash Level Records, dataset `y2wy-tgr5`](https://data.austintexas.gov/Transportation-and-Mobility/Austin-Crash-Report-Data-Crash-Level-Records/y2wy-tgr5/about_data) | ~230k geocoded crashes available; oldest 100 fetched by default |
-| `txdot_aadt.csv` | [TxDOT AADT Annuals (Public View)](https://gis-txdot.opendata.arcgis.com/datasets/txdot-aadt-annuals) | 1,585 active Austin-metro stations, 19 years of history |
-| `austin_zoning.csv` | [Zoning By Address, dataset `nbzi-qabm`](https://data.austintexas.gov/Building-and-Development/Zoning-By-Address/nbzi-qabm) | ~263k addresses, ~22 MB |
-| `austin_schools.csv` | [NCES Public School Locations - Current](https://data-nces.opendata.arcgis.com/) | 649 schools in the five Austin-metro counties |
-| `capmetro_stops.csv` | [CapMetro GTFS, dataset `r4v4-vz24`](https://data.texas.gov/dataset/CapMetro-GTFS/r4v4-vz24) | `stops.txt` from the GTFS zip, ~2,364 stops |
+### CSV Files (downloaded and saved locally)
+
+| Dataset | Type | Source | Notes |
+| --- | --- | --- | --- |
+| `crashes_raw.csv` | CSV | [Austin Crash Report Data, dataset `y2wy-tgr5`](https://data.austintexas.gov/Transportation-and-Mobility/Austin-Crash-Report-Data-Crash-Level-Records/y2wy-tgr5/about_data) | ~230k geocoded crashes available; oldest 100 fetched by default |
+| `txdot_aadt.csv` | CSV | [TxDOT AADT Annuals (ArcGIS)](https://gis-txdot.opendata.arcgis.com/datasets/d5f56ecd2b274b4d8dc3c2d6fe067d37_0/explore) | 1,585 active Austin-metro stations, 19 years of Annual Average Daily Traffic |
+| `austin_zoning.csv` | CSV | [Austin Zoning By Address, dataset `nbzi-qabm`](https://data.austintexas.gov/Building-and-Development/Zoning-By-Address/nbzi-qabm) | ~263k addresses with zoning classification |
+| `austin_schools.csv` | CSV | [NCES Public School Locations](https://services1.arcgis.com/Ua5sjt3LWTPigjyD/arcgis/rest/services/Public_School_Locations_Current/FeatureServer) | 649 public and charter schools in five Austin-metro counties |
+| `capmetro_stops.csv` | CSV | [CapMetro GTFS, dataset `r4v4-vz24`](https://data.texas.gov/dataset/CapMetro-GTFS/r4v4-vz24) | General Transit Feed Specification: ~2,364 bus stops |
+
+### APIs (queried on-demand, not saved locally)
+
+| Source | Type | Documentation | Notes |
+| --- | --- | --- | --- |
+| **Weather** | API | [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) | Free hourly historical data: temperature, precipitation, wind, visibility, weather codes (no API key required); cached in `weather_cache.json` |
+| **Roads** | API | [OpenStreetMap via OSMnx](https://osmnx.readthedocs.io/) | Road network, road types, lanes, speed limits, intersections, lighting, curvature; cached in `austin_road_network.pkl` |
 
 Schools come from NCES rather than the City of Austin's "Schools with Data" set (`63ig-4knr`) that the module header originally named: that dataset publishes no coordinate columns, so it cannot support a distance calculation. NCES covers public and charter schools; private schools are not included.
 
